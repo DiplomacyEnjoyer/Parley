@@ -60,6 +60,8 @@ namespace Parley.Engine
         public BoardState scratch;
         public OrderSeal seal;
         public Announcement announce;
+        public Ruleset rules;
+        public Dice dice;
 
         public int stage;
 
@@ -84,6 +86,13 @@ namespace Parley.Engine
         public string[] lastSalt;
         public string[] lastSheet;
         public string lastSealKey = "";
+        /// <summary>The dice seed of the phase that was resolved last ("" if it had no dice).</summary>
+        public string lastDiceSeed = "";
+        /// <summary>
+        /// Games without sealed orders (tests, bots) have no player secrets to build a
+        /// dice seed from; whoever runs the game supplies this text instead.
+        /// </summary>
+        public string diceNoise = "";
 
         /// <summary>Time at which the clock runs out, or -1 for no deadline (STAGE_ORDERS).</summary>
         public float deadline;
@@ -125,9 +134,11 @@ namespace Parley.Engine
         private int[] handIn;
         private string[] saltText;
 
-        public void Init(MapData m, BoardState s, Adjudicator a, GameCodec c, GameHistory h, BoardState scratchState, OrderSeal orderSeal, Announcement announcement)
+        public void Init(MapData m, BoardState s, Adjudicator a, GameCodec c, GameHistory h, BoardState scratchState, OrderSeal orderSeal, Announcement announcement, Ruleset ruleset, Dice diceCup)
         {
             map = m; state = s; adj = a; codec = c; history = h; scratch = scratchState; seal = orderSeal; announce = announcement;
+            rules = ruleset; dice = diceCup;
+            rules.Attach(state); rules.Attach(scratch);
             int n = m.powerCount;
             seatPresent = new bool[n]; sheet = new string[n]; submitted = new bool[n]; sealText = new string[n]; opened = new bool[n];
             ready = new bool[n]; drawVote = new bool[n]; handIn = new int[n]; saltText = new string[n];
@@ -138,7 +149,7 @@ namespace Parley.Engine
             announceLeadSeconds = 0; announcePowerSeconds = 0; announceOrderSeconds = 0; announceResultSeconds = 0;
             for (int i = 0; i < n; i++) { seatPresent[i] = false; lastSeal[i] = ""; lastSalt[i] = ""; lastSheet[i] = ""; }
             ClearPhaseData();
-            state.SetupStart(map);
+            rules.SetupStart(state);
         }
 
         /// <summary>
@@ -178,6 +189,7 @@ namespace Parley.Engine
         {
             error = "";
             if (power < 0 || power >= map.powerCount || playerName == null || playerName == "") { error = "no such seat"; return false; }
+            if (!rules.Playable(power)) { error = "nobody plays that power"; return false; }
             string holder = history.seatName[power];
             if (holder != "" && holder != playerName && seatPresent[power]) { error = "that seat is taken"; return false; }
             int old = SeatOf(playerName);
@@ -241,7 +253,7 @@ namespace Parley.Engine
         {
             error = "";
             if (stage != STAGE_LOBBY) { error = "a game is already running"; return false; }
-            state.SetupStart(map);
+            rules.SetupStart(state);
             history.count = 0;
             history.Push(codec.EncodeBody(state));
             ClearPhaseData();
@@ -256,7 +268,7 @@ namespace Parley.Engine
         {
             stage = STAGE_LOBBY; deadline = -1; pausedRemaining = -1; stageEnds = -1;
             history.count = 0;
-            state.SetupStart(map);
+            rules.SetupStart(state);
             ClearPhaseData();
             announce.Clear();
             phaseSerial++;
@@ -329,8 +341,7 @@ namespace Parley.Engine
         /// <summary>Which movement phase of the game the board is in (0 = the first).</summary>
         public int MovePhaseIndex()
         {
-            int i = (state.year - map.startYear) * 2 + (state.season == BoardState.FALL ? 1 : 0);
-            return i < 0 ? 0 : i;
+            return rules.MoveIndex(state);
         }
 
         /// <summary>Seconds on the clock for the phase the board is in, or -1 for no limit.</summary>
@@ -382,10 +393,19 @@ namespace Parley.Engine
         public bool NeedsOrders(int power)
         {
             if (!PhaseOpen()) return false;
-            if (state.phase == BoardState.PHASE_MOVE) return state.CountUnits(power) > 0;
-            if (state.phase == BoardState.PHASE_RETREAT) return state.CountDislodged(power) > 0;
-            if (state.phase == BoardState.PHASE_ADJUST) return adj.AdjustDelta(state, power) != 0;
-            return false;
+            return rules.NeedsOrders(state, power);
+        }
+
+        /// <summary>
+        /// Sealed orders: must this power's device publish a seal this phase? Yes if it has
+        /// orders to give, and also, in a phase with dice, if a player sits there at all:
+        /// every seal carries a secret that goes into the dice (an empty sheet will do).
+        /// </summary>
+        public bool NeedsSeal(int power)
+        {
+            if (!PhaseOpen()) return false;
+            if (rules.NeedsOrders(state, power)) return true;
+            return rules.UsesDice(state) && history.seatName[power] != "" && rules.Playable(power);
         }
 
         /// <summary>
@@ -407,10 +427,8 @@ namespace Parley.Engine
         // checks order text by decoding it into the (cleared) referee
         private bool WellFormed(string ordersText, int power)
         {
-            adj.ClearOrders();
-            bool ok = codec.DecodeOrders(ordersText, state, adj, power);
-            adj.ClearOrders();
-            if (!ok) error = codec.error;
+            bool ok = rules.OrdersOk(ordersText, state, power);
+            if (!ok) error = rules.error;
             return ok;
         }
 
@@ -499,7 +517,7 @@ namespace Parley.Engine
         private bool AllSealed()
         {
             for (int p = 0; p < map.powerCount; p++)
-                if (NeedsOrders(p) && Counts(p) && sealText[p] == "") return false;
+                if (NeedsSeal(p) && Counts(p) && sealText[p] == "") return false;
             return true;
         }
 
@@ -517,7 +535,7 @@ namespace Parley.Engine
             bool anyone = false;
             for (int p = 0; p < map.powerCount; p++)
             {
-                if (history.seatName[p] == "" || !seatPresent[p] || state.IsEliminated(p)) continue;
+                if (history.seatName[p] == "" || !seatPresent[p] || rules.IsOut(state, p)) continue;
                 anyone = true;
                 if (!ready[p]) return false;
             }
@@ -643,18 +661,19 @@ namespace Parley.Engine
             if (!PhaseOpen()) return;
             lastSealKey = sealedOrders ? SealKey() : "";
             for (int p = 0; p < map.powerCount; p++) handIn[p] = HandIn(p);
-            adj.ClearOrders();
+            lastDiceSeed = DiceSeed();
+            rules.ClearOrders();
             for (int p = 0; p < map.powerCount; p++)
             {
                 bool use = handIn[p] == Announcement.S_ORDERS;
-                if (use) codec.DecodeOrders(sheet[p], state, adj, p);
+                if (use) rules.AddOrders(sheet[p], state, p);
                 lastSeal[p] = sealText[p];
                 lastSheet[p] = use ? sheet[p] : "";
                 lastSalt[p] = use && sealedOrders ? saltText[p] : "";
             }
-            history.SetLatestOrders(codec.EncodeOrders(state, adj, -1));
+            history.SetLatestOrders(rules.OrdersText(state, -1));
             announce.Capture(state, adj, handIn);
-            adj.Resolve(state);
+            rules.Resolve(state, lastDiceSeed);
             announce.Finish(adj);
             history.Push(codec.EncodeBody(state));
             if (maxArchiveChars > 0) history.TrimTo(maxArchiveChars);
@@ -664,6 +683,19 @@ namespace Parley.Engine
             float length = announce.Duration(announceLeadSeconds, announcePowerSeconds, announceOrderSeconds, announceResultSeconds);
             if (length > 0) { stage = STAGE_ANNOUNCE; announceStart = now; stageEnds = now + length; }
             else NextStage(now);
+        }
+
+        // The dice seed of the phase being resolved: a fingerprint of every secret that was
+        // opened (each was fixed by its seal before anybody could see anybody else's), tied
+        // to the phase. "" when the ruleset rolls no dice.
+        private string DiceSeed()
+        {
+            if (!rules.UsesDice(state)) return "";
+            string t = Dice.VERSION + "|seed|" + SealKey();
+            if (!sealedOrders) return seal.Sha256Hex(t + "|open|" + diceNoise);
+            for (int p = 0; p < map.powerCount; p++)
+                if (opened[p]) t += "|" + p.ToString() + ":" + saltText[p];
+            return seal.Sha256Hex(t);
         }
 
         // after a start or an announcement: game over, ready-up, or straight to the clock
@@ -727,7 +759,7 @@ namespace Parley.Engine
             bool any = false;
             for (int p = 0; p < map.powerCount; p++)
             {
-                if (state.IsEliminated(p) || history.seatName[p] == "") continue;
+                if (rules.IsOut(state, p) || history.seatName[p] == "") continue;
                 any = true;
                 if (!drawVote[p]) return false;
             }

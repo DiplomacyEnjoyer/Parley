@@ -19,6 +19,9 @@ public sealed class Game
     public OrderSeal Seal;
     public Announcement Announce;
     public BoardState Scratch;
+    public Ruleset Rules;
+    public StandardRules Standard;
+    public Dice Dice;
 
     public static Game FromPmap(string pmapText, Dictionary<string, List<string>> aliases = null)
     {
@@ -42,7 +45,11 @@ public sealed class Game
         g.Scratch = new BoardState(); g.Scratch.Init(map);
         g.Seal = new OrderSeal(); g.Seal.Init();
         g.Announce = new Announcement(); g.Announce.Init(map);
-        g.Flow = new GameFlow(); g.Flow.Init(map, g.State, g.Adj, g.Codec, g.History, g.Scratch, g.Seal, g.Announce);
+        g.Dice = new Dice(); g.Dice.Init(g.Seal);
+        g.Standard = new StandardRules();
+        g.Rules = new Ruleset();
+        if (!g.Rules.Init(map, g.Adj, g.Codec, g.Dice, g.Standard)) throw new InvalidDataException(g.Rules.error);
+        g.Flow = new GameFlow(); g.Flow.Init(map, g.State, g.Adj, g.Codec, g.History, g.Scratch, g.Seal, g.Announce, g.Rules, g.Dice);
         return g;
     }
 

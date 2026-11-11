@@ -554,3 +554,69 @@ browser keeps the whole archive in its local storage after each phase; if a serv
 loses the game (or it is opened on another server), the page offers "Resume it here".
 The private order sheet lives only in the browser it was written in; a player switching
 devices mid-phase starts that phase's sheet again on the new device.
+
+---
+
+*Decisions 23 onward were made in the third session (the "hard design" session: pluggable
+rules, tamper-proof orders and dice, the Renaissance money-and-bribes ruleset, fog of war,
+VRChat sync).*
+
+## 23. Rulesets are modules; the standard game is one of them
+
+**What was asked:** the engine should not have the standard game baked in. A ruleset
+should be able to define its seasons, unit types, money, secret spending, random events
+and victory, so that the Renaissance game (decision 26) is an add-on and not a rewrite.
+
+**How it is built.**
+
+- `Ruleset.cs` is the only door through which the game flow reaches "the rules". It asks
+  the same handful of questions of whichever module the board names: does this power
+  have anything to decide, is this sheet readable, resolve the phase, are dice needed,
+  can a player sit here, who is out.
+- `StandardRules.cs` is the standard game as a module. It is short on purpose.
+- `Adjudicator.cs` is now the **shared referee**: moving, supporting, cutting, convoying,
+  dislodging and retreating. Every ruleset uses it, so the part of the engine that the
+  DATC and the cross-checks verify is the same part a new ruleset runs on.
+- The board file names its ruleset (`rules <id>`; none means standard) and describes the
+  calendar as data: `seasons Spring Summer Fall* Winter` gives three movement seasons,
+  the star marks the seasons after which centres change hands, the last name is the
+  adjustment time. A three-season game on standard rules already works from that one line.
+- What a ruleset can change, and where:
+
+  | A ruleset defines | How |
+  |---|---|
+  | Seasons per year, phases | `seasons` line; the module's own `Resolve` decides what follows what |
+  | Unit types, where they can stand | `MapData` (army, fleet, garrison in a walled city) |
+  | Unit strength, one-off bonuses, forced holds | set in the referee before it resolves (`uStr`, `uBonus`) |
+  | Money, loans, marks on units and provinces | spare room in `BoardState` (`ext`, `unitFlag`, `provFlag`), saved in game codes automatically |
+  | Secret spending before movement | part of the same sealed sheet; the module resolves it first |
+  | Random events | the `Dice` it is handed (decision 25) |
+  | Victory | the module sets the winner |
+
+- A walled city is modelled as **a space of its own inside its province**, where only a
+  garrison can stand. Converting a unit into or out of a garrison is then simply a move
+  between province and city, and the referee's existing, verified logic (bounces,
+  supports, "cannot retreat to where the attacker came from") applies without special
+  cases. This is also how the e-mail judges treated it.
+
+**Standard games are untouched.** Board fingerprints and game codes of standard boards
+are byte-for-byte what they were (a test pins this), so old saves load. All earlier
+tests, the DATC and the cross-checks pass unchanged.
+
+*Why a switch and not "real" plug-ins:* the engine keeps to a strict subset of UdonSharp
+(decision 3) with no interfaces, inheritance or delegates. So `Ruleset.cs` is a plain
+switch: adding a ruleset means writing its module and adding one line per method there.
+
+*Alternatives considered:*
+- **UdonSharp inheritance** (a base class with virtual methods; current UdonSharp does
+  support it). Tidier, but it is exactly the kind of feature decision 3 avoids until the
+  engine has been compiled in Unity once. Easy to switch to later.
+- **A separate referee per ruleset.** Rejected: the Renaissance game would then run on
+  movement code that the DATC never touched.
+- **Putting the ruleset's description in code only.** The calendar and city data live in
+  the board file instead, because every part of the engine already holds the map, and
+  because it lets a map maker try a calendar without touching code.
+
+**Limits to know about.** An adjustment phase can only follow the last season of the
+year. The map file format gained optional lines (`rules`, `seasons`, `city`, `convoy
+coastal`, `x ...`); files without them mean exactly what they did.

@@ -12,6 +12,9 @@ namespace Parley.Engine
     /// </summary>
     public class BoardState : UdonSharpBehaviour
     {
+        // Seasons are numbered 0, 1, ... in the order the map's ruleset lists them; the
+        // adjustment time after the last one has the next number. These three names are
+        // the standard game's (two seasons); other rulesets use the plain numbers.
         public const int SPRING = 0;
         public const int FALL = 1;
         public const int WINTER = 2;
@@ -29,6 +32,8 @@ namespace Parley.Engine
         public int[] unitType;
         public int[] unitPower;
         public int[] unitLoc;
+        /// <summary>Per unit: a mark the ruleset gives it (0 in the standard game; e.g. "elite" elsewhere).</summary>
+        public int[] unitFlag;
 
         /// <summary>Per province: power that owns the supply centre there, or -1.</summary>
         public int[] owner;
@@ -40,6 +45,7 @@ namespace Parley.Engine
         public int[] disLoc;
         /// <summary>Province the attacker came from (retreat there is forbidden), or -1.</summary>
         public int[] disFrom;
+        public int[] disFlag;
         /// <summary>Per province: true if a standoff left it empty this turn (no retreats into it).</summary>
         public bool[] contested;
 
@@ -51,22 +57,40 @@ namespace Parley.Engine
         /// <summary>Per province: index of the unit standing there, or -1. Rebuilt by <see cref="Reindex"/>.</summary>
         public int[] provUnit;
 
+        // ---- room for whatever else a ruleset keeps (all unused, and absent from game codes, in the standard game) ----
+        /// <summary>Per province: marks the ruleset puts on it (famine, rebellion, a siege under way ...).</summary>
+        public int[] provFlag;
+        /// <summary>Numbers the ruleset keeps (treasuries, loans, options ...); what each one means is the ruleset's business.</summary>
+        public int[] ext;
+        public int extCount;
+
         private int provCount;
+        private string seasonLetters;
 
         public void Init(MapData map)
         {
             provCount = map.provCount;
             int cap = map.provCount;
-            unitType = new int[cap]; unitPower = new int[cap]; unitLoc = new int[cap];
-            disType = new int[cap]; disPower = new int[cap]; disLoc = new int[cap]; disFrom = new int[cap];
-            owner = new int[cap]; contested = new bool[cap]; provUnit = new int[cap];
+            unitType = new int[cap]; unitPower = new int[cap]; unitLoc = new int[cap]; unitFlag = new int[cap];
+            disType = new int[cap]; disPower = new int[cap]; disLoc = new int[cap]; disFrom = new int[cap]; disFlag = new int[cap];
+            owner = new int[cap]; contested = new bool[cap]; provUnit = new int[cap]; provFlag = new int[cap];
+            seasonLetters = map.seasonLetters;
+            if (ext == null) { ext = new int[0]; extCount = 0; }
             Clear();
         }
 
         public void Clear()
         {
             unitCount = 0; disCount = 0; year = 0; season = SPRING; phase = PHASE_MOVE; winner = -1; drawn = false;
-            for (int p = 0; p < provCount; p++) { owner[p] = -1; contested[p] = false; provUnit[p] = -1; }
+            for (int p = 0; p < provCount; p++) { owner[p] = -1; contested[p] = false; provUnit[p] = -1; provFlag[p] = 0; }
+            for (int i = 0; i < extCount; i++) ext[i] = 0;
+        }
+
+        /// <summary>Called by a ruleset that keeps extra numbers: makes room for n of them (all zero).</summary>
+        public void SetExtSize(int n)
+        {
+            ext = new int[n]; extCount = n;
+            for (int i = 0; i < n; i++) ext[i] = 0;
         }
 
         /// <summary>Sets up the map's starting position.</summary>
@@ -83,9 +107,11 @@ namespace Parley.Engine
         {
             year = o.year; season = o.season; phase = o.phase; winner = o.winner; drawn = o.drawn;
             unitCount = o.unitCount; disCount = o.disCount;
-            for (int i = 0; i < unitCount; i++) { unitType[i] = o.unitType[i]; unitPower[i] = o.unitPower[i]; unitLoc[i] = o.unitLoc[i]; }
-            for (int i = 0; i < disCount; i++) { disType[i] = o.disType[i]; disPower[i] = o.disPower[i]; disLoc[i] = o.disLoc[i]; disFrom[i] = o.disFrom[i]; }
-            for (int p = 0; p < provCount; p++) { owner[p] = o.owner[p]; contested[p] = o.contested[p]; provUnit[p] = o.provUnit[p]; }
+            for (int i = 0; i < unitCount; i++) { unitType[i] = o.unitType[i]; unitPower[i] = o.unitPower[i]; unitLoc[i] = o.unitLoc[i]; unitFlag[i] = o.unitFlag[i]; }
+            for (int i = 0; i < disCount; i++) { disType[i] = o.disType[i]; disPower[i] = o.disPower[i]; disLoc[i] = o.disLoc[i]; disFrom[i] = o.disFrom[i]; disFlag[i] = o.disFlag[i]; }
+            for (int p = 0; p < provCount; p++) { owner[p] = o.owner[p]; contested[p] = o.contested[p]; provUnit[p] = o.provUnit[p]; provFlag[p] = o.provFlag[p]; }
+            if (extCount != o.extCount) SetExtSize(o.extCount);
+            for (int i = 0; i < extCount; i++) ext[i] = o.ext[i];
         }
 
         /// <summary>Adds a unit. Returns its index, or -1 if the province is occupied or the place is invalid.</summary>
@@ -95,7 +121,7 @@ namespace Parley.Engine
             int p = map.locProv[loc];
             if (provUnit[p] >= 0) return -1;
             int u = unitCount;
-            unitType[u] = type; unitPower[u] = power; unitLoc[u] = loc;
+            unitType[u] = type; unitPower[u] = power; unitLoc[u] = loc; unitFlag[u] = 0;
             provUnit[p] = u;
             unitCount++;
             return u;
@@ -108,7 +134,7 @@ namespace Parley.Engine
             int last = unitCount - 1;
             if (u != last)
             {
-                unitType[u] = unitType[last]; unitPower[u] = unitPower[last]; unitLoc[u] = unitLoc[last];
+                unitType[u] = unitType[last]; unitPower[u] = unitPower[last]; unitLoc[u] = unitLoc[last]; unitFlag[u] = unitFlag[last];
                 provUnit[map.locProv[unitLoc[u]]] = u;
             }
             unitCount = last;
@@ -151,7 +177,7 @@ namespace Parley.Engine
         /// <summary>Short label such as "S1901M" (Spring 1901 Movement).</summary>
         public string PhaseLabel()
         {
-            string s = season == SPRING ? "S" : (season == FALL ? "F" : "W");
+            string s = season >= 0 && season < seasonLetters.Length ? seasonLetters.Substring(season, 1) : "?";
             string t = phase == PHASE_MOVE ? "M" : (phase == PHASE_RETREAT ? "R" : (phase == PHASE_ADJUST ? "A" : "X"));
             return s + year.ToString() + t;
         }

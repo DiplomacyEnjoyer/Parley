@@ -25,9 +25,15 @@ namespace Parley.Engine
         public const int LAND = 0;   // inland: armies only
         public const int COAST = 1;  // coastal land: armies and fleets
         public const int SEA = 2;    // water: fleets only
+        public const int CITY = 3;   // a walled city inside a province: only garrisons stand here
 
         public const int ARMY = 0;
         public const int FLEET = 1;
+        public const int GARRISON = 2; // only in rulesets that have walled cities
+
+        public const int CITY_NONE = 0;
+        public const int CITY_OPEN = 1;   // a city without walls: it has an income but cannot hold a garrison
+        public const int CITY_WALLED = 2; // a fortified city: a garrison can stand in it
 
         public const int BUILD_HOME = 0; // build only in owned home centres (standard rule)
         public const int BUILD_ANY = 1;  // build in any owned centre (common variant rule)
@@ -51,8 +57,36 @@ namespace Parley.Engine
         public int victoryCenters = 0;
         public int buildMode = 0;
 
+        // ---- the rules that go with this board ----
+        // Load fills these with the standard game's values; a Ruleset (see Ruleset.cs) may
+        // overwrite them. Every engine part reads them from here, because every part has the map.
+        /// <summary>Which ruleset this board is played with ("standard" unless the file says otherwise).</summary>
+        public string rulesId = "standard";
+        /// <summary>The rest of the file's "rules" line: defaults for that ruleset's options.</summary>
+        public string rulesArgs = "";
+        /// <summary>Movement seasons per year (2 in the standard game: spring and fall).</summary>
+        public int seasonCount = 2;
+        /// <summary>One letter per season, plus one for the adjustment time after the last season ("SFW").</summary>
+        public string seasonLetters = "SFW";
+        public string[] seasonNames;
+        /// <summary>Per season: do supply centres change hands when it ends?</summary>
+        public bool[] seasonCapture;
+        /// <summary>Unit types in play (2: army and fleet; 3 adds the garrison).</summary>
+        public int unitTypeCount = 2;
+        public string unitLetters = "AF";
+        /// <summary>True if fleets standing in coastal provinces may convoy too.</summary>
+        public bool coastConvoy;
+        /// <summary>True if positions carry the extra numbers a ruleset keeps (unit and province marks, treasuries).</summary>
+        public bool extended;
+
         // ---- provinces ----
+        /// <summary>
+        /// All provinces. Ordinary provinces come first (0..landCount-1); after them one
+        /// extra entry per walled city (type CITY), which is where that city's garrison stands.
+        /// </summary>
         public int provCount;
+        /// <summary>Number of ordinary provinces (everything that is not a city entry).</summary>
+        public int landCount;
         public string[] provId;
         public string[] provName;
         public int[] provType;
@@ -61,6 +95,18 @@ namespace Parley.Engine
         public int[] provCoastStart;  // first extra coast loc of this province (if any)
         public int[] provCoastCount;  // number of extra coast locs (0 for normal provinces)
         public int scCount;
+
+        // ---- cities (all CITY_NONE / -1 on boards without them) ----
+        public int[] cityKind;        // per province: CITY_NONE, CITY_OPEN or CITY_WALLED
+        public int[] cityIncome;      // per province: what the city pays each year
+        public bool[] cityPort;       // per province: fleets can be built, garrisoned and besiege here
+        /// <summary>Per province: city and province are one space, so only one unit fits (it may be a garrison).</summary>
+        public bool[] provSingle;
+        public int[] provCity;        // per province: index of its city entry, or -1
+        public int[] cityProv;        // per city entry: the province around it; -1 for ordinary provinces
+        /// <summary>Lines starting with "x": tables and settings that only a particular ruleset reads.</summary>
+        public string[] extLine;
+        public int extLineCount;
 
         // ---- locs ----
         public int locCount;
@@ -114,6 +160,7 @@ namespace Parley.Engine
 
             // ---- pass 1: count things so arrays can be sized ----
             int nProv = 0; int nPow = 0; int nCoast = 0; int nUnit = 0; int nArmyEdge = 0; int nFleetEdge = 0;
+            int nCity = 0; int nExt = 0;
             bool sawHeader = false;
             for (int i = 0; i < n; i++)
             {
@@ -126,6 +173,8 @@ namespace Parley.Engine
                     if (tokCount < 2 || ParseInt(tok[1], -1) != FORMAT_VERSION) { error = "unsupported map format version"; return false; }
                 }
                 else if (k == "prov") nProv++;
+                else if (k == "city") { if (tokCount >= 3 && tok[2] == "walled" && !HasToken("single", 3)) nCity++; }
+                else if (k == "x") nExt++;
                 else if (k == "power") nPow++;
                 else if (k == "coast") nCoast++;
                 else if (k == "unit") nUnit++;
@@ -136,6 +185,9 @@ namespace Parley.Engine
             if (nProv == 0) { error = "map has no provinces"; return false; }
             if (nPow == 0) { error = "map has no powers"; return false; }
 
+            int nLand = nProv;
+            nProv = nLand + nCity;      // from here on nProv counts the city entries too
+            landCount = nLand;
             provCount = nProv;
             locCount = nProv + nCoast;
             powerCount = nPow;
@@ -144,6 +196,15 @@ namespace Parley.Engine
             provCoastStart = new int[nProv]; provCoastCount = new int[nProv];
             provX = new int[nProv]; provY = new int[nProv]; provShape = new string[nProv];
             startOwner = new int[nProv];
+            cityKind = new int[nProv]; cityIncome = new int[nProv]; cityPort = new bool[nProv]; provSingle = new bool[nProv];
+            provCity = new int[nProv]; cityProv = new int[nProv];
+            extLine = new string[nExt]; extLineCount = 0;
+            rulesId = "standard"; rulesArgs = ""; coastConvoy = false; extended = false;
+            seasonCount = 2; seasonLetters = "SFW"; unitTypeCount = 2; unitLetters = "AF";
+            seasonNames = new string[3]; seasonNames[0] = "Spring"; seasonNames[1] = "Fall"; seasonNames[2] = "Winter";
+            seasonCapture = new bool[2]; seasonCapture[0] = false; seasonCapture[1] = true;
+            bool customSeasons = false;
+            for (int i = 0; i < nProv; i++) { cityKind[i] = CITY_NONE; cityIncome[i] = 0; cityPort[i] = false; provSingle[i] = false; provCity[i] = -1; cityProv[i] = -1; }
             locProv = new int[locCount]; locCoast = new string[locCount]; locId = new string[locCount];
             powerId = new string[nPow]; powerName = new string[nPow]; powerAdjective = new string[nPow]; powerColor = new string[nPow];
             startUnitPower = new int[nUnit]; startUnitType = new int[nUnit]; startUnitLoc = new int[nUnit];
@@ -211,7 +272,63 @@ namespace Parley.Engine
                 else if (k == "victory" && tokCount >= 2) victoryCenters = ParseInt(tok[1], 0);
                 else if (k == "build" && tokCount >= 2) buildMode = tok[1] == "any" ? BUILD_ANY : BUILD_HOME;
                 else if (k == "size" && tokCount >= 3) { layoutWidth = ParseInt(tok[1], 0); layoutHeight = ParseInt(tok[2], 0); }
+                else if (k == "rules" && tokCount >= 2) { rulesId = tok[1].ToLower(); rulesArgs = JoinFrom(2); extended = rulesId != "standard"; }
+                else if (k == "convoy" && tokCount >= 2) coastConvoy = tok[1] == "coastal";
+                else if (k == "x") { extLine[extLineCount] = JoinFrom(1); extLineCount++; }
+                else if (k == "seasons")
+                {
+                    // seasons <Name> <Name> ... <NameOfAdjustmentTime>   (a '*' after a name: centres change hands when it ends)
+                    if (tokCount < 3 || tokCount > 10) { error = "line " + (i + 1).ToString() + ": seasons needs one to eight season names and a name for the adjustment time"; return false; }
+                    seasonCount = tokCount - 2;
+                    seasonNames = new string[seasonCount + 1]; seasonCapture = new bool[seasonCount];
+                    seasonLetters = "";
+                    for (int t = 1; t < tokCount; t++)
+                    {
+                        string nm = tok[t];
+                        bool star = nm.Length > 1 && nm[nm.Length - 1] == '*';
+                        if (star) nm = nm.Substring(0, nm.Length - 1);
+                        seasonNames[t - 1] = nm.Replace('_', ' ');
+                        if (t - 1 < seasonCount) seasonCapture[t - 1] = star;
+                        // the letter: the first letter of the name that no earlier season uses
+                        string up = nm.ToUpper(); string letter = "";
+                        for (int c = 0; c < up.Length && letter == ""; c++)
+                            if (up[c] >= 'A' && up[c] <= 'Z' && seasonLetters.IndexOf(up[c]) < 0) letter = up.Substring(c, 1);
+                        if (letter == "") { error = "line " + (i + 1).ToString() + ": cannot find a distinct letter for season " + nm; return false; }
+                        seasonLetters += letter;
+                    }
+                    customSeasons = true;
+                }
             }
+            // ---- pass 3b: cities ----
+            int cn = nLand;
+            for (int i = 0; i < n; i++)
+            {
+                Tokenize(lines[i]);
+                if (tokCount == 0 || tok[0] != "city") continue;
+                // city <prov> <open|walled> <income> [port] [single]
+                if (tokCount < 4) { error = "line " + (i + 1).ToString() + ": city needs province, open or walled, income"; return false; }
+                int cp = -1;
+                string cid = tok[1].ToLower();
+                for (int j = 0; j < nLand; j++) if (provId[j] == cid) cp = j;
+                if (cp < 0 || provType[cp] == SEA) { error = "line " + (i + 1).ToString() + ": no land province " + tok[1] + " for this city"; return false; }
+                if (cityKind[cp] != CITY_NONE) { error = "line " + (i + 1).ToString() + ": " + tok[1] + " already has a city"; return false; }
+                if (tok[2] != "open" && tok[2] != "walled") { error = "line " + (i + 1).ToString() + ": a city is open or walled"; return false; }
+                cityKind[cp] = tok[2] == "walled" ? CITY_WALLED : CITY_OPEN;
+                cityIncome[cp] = ParseInt(tok[3], 0);
+                cityPort[cp] = HasToken("port", 4);
+                provSingle[cp] = HasToken("single", 4);
+                if (cityKind[cp] == CITY_WALLED && !provSingle[cp])
+                {
+                    provId[cn] = provId[cp] + "_c"; provName[cn] = provName[cp]; provType[cn] = CITY;
+                    provSc[cn] = true; provHome[cn] = provHome[cp]; startOwner[cn] = startOwner[cp];
+                    provShape[cn] = ""; provX[cn] = -1; provY[cn] = -1;
+                    locProv[cn] = cn; locCoast[cn] = ""; locId[cn] = provId[cn];
+                    cityKind[cn] = CITY_WALLED; cityIncome[cn] = cityIncome[cp]; cityPort[cn] = cityPort[cp];
+                    provCity[cp] = cn; cityProv[cn] = cp;
+                    cn++;
+                }
+            }
+            if (cn > nLand || rulesId != "standard") { unitTypeCount = 3; unitLetters = "AFG"; }
             for (int i = 0; i < nProv; i++)
                 for (int j = 0; j < i; j++)
                     if (provId[i] == provId[j]) { error = "duplicate province id " + provId[i]; return false; }
@@ -293,7 +410,8 @@ namespace Parley.Engine
                     int ul = FindLoc(tok[3]);
                     if (up < 0) { error = "line " + (i + 1).ToString() + ": unknown power " + tok[1]; return false; }
                     if (ul < 0) { error = "line " + (i + 1).ToString() + ": unknown place " + tok[3]; return false; }
-                    int ut = (tok[2] == "F" || tok[2] == "f") ? FLEET : ARMY;
+                    int ut = (tok[2] == "F" || tok[2] == "f") ? FLEET : ((tok[2] == "G" || tok[2] == "g") ? GARRISON : ARMY);
+                    if (ut == GARRISON && ul < landCount && provCity[ul] >= 0) ul = provCity[ul]; // a garrison stands in the city
                     if (!CanStand(ut, ul)) { error = "line " + (i + 1).ToString() + ": that unit type cannot be at " + tok[3]; return false; }
                     startUnitPower[startUnitCount] = up; startUnitType[startUnitCount] = ut; startUnitLoc[startUnitCount] = ul;
                     startUnitCount++;
@@ -309,6 +427,7 @@ namespace Parley.Engine
                         int b = FindProv(tok[t]);
                         if (b < 0 || !provSc[b]) { error = "line " + (i + 1).ToString() + ": " + tok[t] + " is not a supply centre"; return false; }
                         startOwner[b] = op;
+                        if (provCity[b] >= 0) startOwner[provCity[b]] = op;
                     }
                 }
                 else if (k == "xy")
@@ -380,7 +499,7 @@ namespace Parley.Engine
             if (victoryCenters <= 0) victoryCenters = scCount / 2 + 1;
             mapId = CleanId(mapId);
             if (mapId == "") mapId = "map";
-            if (locCount > 1900) { error = "map too large (more than 1900 places)"; return false; }
+            if (locCount * unitTypeCount > 3800) { error = "map too large (more than " + (3800 / unitTypeCount).ToString() + " places)"; return false; }
             if (powerCount > 3000) { error = "too many powers"; return false; }
             if (mapName == "") mapName = mapId;
             for (int p = 0; p < nProv; p++)
@@ -395,9 +514,16 @@ namespace Parley.Engine
                 for (int v = 0; v < u; v++)
                     if (locProv[startUnitLoc[u]] == locProv[startUnitLoc[v]]) { error = "two starting units in " + provId[locProv[startUnitLoc[u]]]; return false; }
 
-            hash = ComputeHash();
+            hash = ComputeHash(customSeasons);
             tok = null;
             return true;
+        }
+
+        // Is the word among the tokens of the current line, from position "first" on?
+        private bool HasToken(string word, int first)
+        {
+            for (int i = first; i < tokCount; i++) if (tok[i] == word) return true;
+            return false;
         }
 
         private void AddUnique(int[] adj, int[] start, int[] count, int from, int to)
@@ -488,7 +614,7 @@ namespace Parley.Engine
 
         // Fingerprint of the rule-relevant content. Uses only small modular arithmetic
         // so it behaves identically everywhere (no reliance on integer overflow).
-        private string ComputeHash()
+        private string ComputeHash(bool customSeasons)
         {
             int h1 = 7; int h2 = 13;
             for (int p = 0; p < provCount; p++)
@@ -511,6 +637,20 @@ namespace Parley.Engine
             }
             h1 = (h1 * 31 + powerCount * 101 + victoryCenters * 7 + buildMode) % M1;
             h2 = (h2 * 29 + startYear % 9973) % M2;
+            // Everything below is only mixed in when a board uses it, so the fingerprints of
+            // plain standard boards stay what they always were.
+            if (rulesId != "standard" || customSeasons || coastConvoy || landCount != provCount || extLineCount > 0)
+            {
+                string t = rulesId + "|" + rulesArgs + "|" + seasonLetters + (coastConvoy ? "|cc" : "");
+                for (int i = 0; i < seasonCount; i++) t += seasonCapture[i] ? "1" : "0";
+                for (int i = 0; i < extLineCount; i++) t += "|" + extLine[i];
+                for (int i = 0; i < t.Length; i++) { h1 = (h1 * 31 + t[i]) % M1; h2 = (h2 * 29 + t[i] + i % 7) % M2; }
+                for (int p = 0; p < landCount; p++)
+                {
+                    int v = cityKind[p] + cityIncome[p] * 3 + (cityPort[p] ? 40 : 0) + (provSingle[p] ? 80 : 0) + (provCity[p] + 1) * 160;
+                    h1 = (h1 * 31 + v) % M1; h2 = (h2 * 29 + v + 1) % M2;
+                }
+            }
             string digits = HASH_DIGITS;
             string s = "";
             for (int i = 0; i < 3; i++) { s += digits.Substring(h1 % 32, 1); h1 = h1 / 32; }
@@ -586,7 +726,7 @@ namespace Parley.Engine
         public bool FleetCanStand(int loc)
         {
             int p = locProv[loc];
-            if (provType[p] == LAND) return false;
+            if (provType[p] == LAND || provType[p] == CITY) return false;
             if (provType[p] == SEA) return loc == p;
             if (provCoastCount[p] > 0) return loc != p; // must be on a named coast
             return true;
@@ -595,7 +735,8 @@ namespace Parley.Engine
         public bool CanStand(int unitType, int loc)
         {
             if (loc < 0 || loc >= locCount) return false;
-            if (unitType == ARMY) return loc < provCount && provType[loc] != SEA;
+            if (unitType == ARMY) return loc < provCount && provType[loc] != SEA && provType[loc] != CITY;
+            if (unitType == GARRISON) return loc < provCount && (provType[loc] == CITY || (provSingle[loc] && cityKind[loc] == CITY_WALLED));
             return FleetCanStand(loc);
         }
 
@@ -603,7 +744,7 @@ namespace Parley.Engine
         public string LocName(int loc)
         {
             if (loc < 0 || loc >= locCount) return "?";
-            if (loc < provCount) return provName[loc];
+            if (loc < provCount) return provType[loc] == CITY ? provName[loc] + " (city)" : provName[loc];
             return provName[locProv[loc]] + " (" + locCoast[loc] + ")";
         }
     }

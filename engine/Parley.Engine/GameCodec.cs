@@ -37,6 +37,7 @@ namespace Parley.Engine
         public string error = "";
 
         private int powerWidth; // characters used for a power number
+        private int unitBase;   // a unit is written as place * unitBase + type
         private string[] parts;
         private int partCount;
         private string[] groupText;
@@ -45,7 +46,8 @@ namespace Parley.Engine
         {
             map = m;
             powerWidth = m.powerCount < 61 ? 1 : 2;
-            parts = new string[16];
+            unitBase = m.unitTypeCount;
+            parts = new string[20];
             groupText = new string[m.powerCount];
         }
 
@@ -148,7 +150,7 @@ namespace Parley.Engine
         /// <summary>Just the position part (used inside history archives, which name the map once).</summary>
         public string EncodeBody(BoardState s)
         {
-            string season = s.season == BoardState.SPRING ? "S" : (s.season == BoardState.FALL ? "F" : "W");
+            string season = s.season >= 0 && s.season < map.seasonLetters.Length ? map.seasonLetters.Substring(s.season, 1) : "?";
             string ph = s.phase == BoardState.PHASE_MOVE ? "M" : (s.phase == BoardState.PHASE_RETREAT ? "R" : (s.phase == BoardState.PHASE_ADJUST ? "A" : "X"));
             string r = season + s.year.ToString() + ph + ".";
             // Units are written in board order (not in the order they happen to be stored), so
@@ -157,7 +159,7 @@ namespace Parley.Engine
             for (int p = 0; p < map.provCount; p++)
             {
                 int u = s.provUnit[p];
-                if (u >= 0) groupText[s.unitPower[u]] += Enc2(s.unitLoc[u] * 2 + s.unitType[u]);
+                if (u >= 0) groupText[s.unitPower[u]] += Enc2(s.unitLoc[u] * unitBase + s.unitType[u]) + (map.extended ? Enc1(s.unitFlag[u]) : "");
             }
             for (int pw = 0; pw < map.powerCount; pw++)
             {
@@ -179,14 +181,95 @@ namespace Parley.Engine
                         if (s.disLoc[d] > lastLoc && (best < 0 || s.disLoc[d] < s.disLoc[best])) best = d;
                     if (best < 0) break;
                     lastLoc = s.disLoc[best];
-                    r += Enc2(s.disLoc[best] * 2 + s.disType[best]) + EncPower(s.disPower[best]) + Enc2(s.disFrom[best] + 1);
+                    r += Enc2(s.disLoc[best] * unitBase + s.disType[best]) + EncPower(s.disPower[best]) + Enc2(s.disFrom[best] + 1) + (map.extended ? Enc1(s.disFlag[best]) : "");
                 }
                 r += "-";
                 for (int p = 0; p < map.provCount; p++) if (s.contested[p]) r += Enc2(p);
             }
             r += ".";
             if (s.phase == BoardState.PHASE_FINISHED) r += s.drawn ? "D" : ("W" + EncPower(s.winner));
+            if (map.extended) r += "." + EncodeExtras(s);
             return r;
+        }
+
+        // What a ruleset keeps beyond the standard position: the marked provinces (place
+        // and mark, three characters each), then its numbers, separated by commas, a run
+        // of zeros written as '-' and its length.
+        private string EncodeExtras(BoardState s)
+        {
+            string r = "";
+            for (int p = 0; p < map.provCount; p++)
+                if (s.provFlag[p] != 0) r += Enc2(p) + Enc1(s.provFlag[p]);
+            r += ".";
+            int i = 0; bool first = true;
+            while (i < s.extCount)
+            {
+                if (!first) r += ",";
+                first = false;
+                if (s.ext[i] == 0)
+                {
+                    int run = 0;
+                    while (i < s.extCount && s.ext[i] == 0) { run++; i++; }
+                    r += "-" + EncNumber(run);
+                }
+                else { r += EncNumber(s.ext[i]); i++; }
+            }
+            return r;
+        }
+
+        private string EncNumber(int v)
+        {
+            if (v <= 0) return "0";
+            string r = "";
+            while (v > 0) { r = DIGITS.Substring(v % 62, 1) + r; v = v / 62; }
+            return r;
+        }
+
+        private int DecNumber(string t)
+        {
+            if (t.Length == 0 || t.Length > 5) return -1;
+            int v = 0;
+            for (int i = 0; i < t.Length; i++)
+            {
+                int d = Val(t[i]);
+                if (d < 0) return -1;
+                v = v * 62 + d;
+            }
+            return v;
+        }
+
+        private bool DecodeExtras(string flags, string numbers, BoardState s)
+        {
+            if (flags.Length % 3 != 0) { error = "bad province marks"; return false; }
+            for (int i = 0; i < flags.Length; i += 3)
+            {
+                int p = Dec2(flags, i); int f = Val(flags[i + 2]);
+                if (p < 0 || p >= map.provCount || f <= 0) { error = "bad province marks"; return false; }
+                s.provFlag[p] = f;
+            }
+            int n = 0;
+            if (numbers.Length > 0)
+            {
+                string[] tok = numbers.Split(',');
+                for (int i = 0; i < tok.Length; i++)
+                {
+                    string t = tok[i];
+                    if (t.Length > 1 && t[0] == '-')
+                    {
+                        int run = DecNumber(t.Substring(1));
+                        if (run <= 0 || n + run > s.extCount) { error = "bad ruleset numbers"; return false; }
+                        n += run; // already zero
+                    }
+                    else
+                    {
+                        int v = DecNumber(t);
+                        if (v < 0 || n >= s.extCount) { error = "bad ruleset numbers"; return false; }
+                        s.ext[n] = v; n++;
+                    }
+                }
+            }
+            if (n != s.extCount) { error = "bad ruleset numbers"; return false; }
+            return true;
         }
 
         /// <summary>Which map does this code need? Returns "id.hash", or "" if the text is not a game code.</summary>
@@ -215,11 +298,12 @@ namespace Parley.Engine
                 error = otherVersion ? "this code is from a different version of the game" : "this is not a game code";
                 return false;
             }
-            if (partCount != 8) { error = "the code is damaged or incomplete"; return false; }
+            if (partCount != (map.extended ? 10 : 8)) { error = "the code is damaged or incomplete"; return false; }
             if (Checksum(body) != check) { error = "the code is damaged or incomplete (checksum does not match)"; return false; }
             if (parts[1] != map.mapId) { error = "this code is for the map '" + parts[1] + "', not '" + map.mapId + "'"; return false; }
             if (parts[2] != map.hash) { error = "this code is for a different version of the map '" + map.mapId + "'"; return false; }
-            return DecodeSections(parts[3], parts[4], parts[5], parts[6], parts[7], s);
+            if (!DecodeSections(parts[3], parts[4], parts[5], parts[6], parts[7], s)) return false;
+            return !map.extended || DecodeExtras(parts[8], parts[9], s);
         }
 
         /// <summary>Loads a position written by <see cref="EncodeBody"/>.</summary>
@@ -228,8 +312,9 @@ namespace Parley.Engine
             error = "";
             if (body == null) { error = "empty position"; return false; }
             SplitInto(body, '.');
-            if (partCount != 5) { error = "position has the wrong number of sections"; return false; }
-            return DecodeSections(parts[0], parts[1], parts[2], parts[3], parts[4], s);
+            if (partCount != (map.extended ? 7 : 5)) { error = "position has the wrong number of sections"; return false; }
+            if (!DecodeSections(parts[0], parts[1], parts[2], parts[3], parts[4], s)) return false;
+            return !map.extended || DecodeExtras(parts[5], parts[6], s);
         }
 
         private bool DecodeSections(string phase, string units, string owners, string retreats, string status, BoardState s)
@@ -238,8 +323,8 @@ namespace Parley.Engine
             // ---- phase ----
             if (phase.Length < 3) { error = "bad phase"; return false; }
             char sc = phase[0]; char pc = phase[phase.Length - 1];
-            if (sc == 'S') s.season = BoardState.SPRING; else if (sc == 'F') s.season = BoardState.FALL; else if (sc == 'W') s.season = BoardState.WINTER;
-            else { error = "bad season"; return false; }
+            s.season = map.seasonLetters.IndexOf(sc);
+            if (s.season < 0) { error = "bad season"; return false; }
             if (pc == 'M') s.phase = BoardState.PHASE_MOVE; else if (pc == 'R') s.phase = BoardState.PHASE_RETREAT;
             else if (pc == 'A') s.phase = BoardState.PHASE_ADJUST; else if (pc == 'X') s.phase = BoardState.PHASE_FINISHED;
             else { error = "bad phase"; return false; }
@@ -254,8 +339,15 @@ namespace Parley.Engine
                 if (units[i] == '-') { pw++; i++; continue; }
                 int v = Dec2(units, i);
                 if (v < 0 || pw >= map.powerCount) { error = "bad unit list"; return false; }
-                if (s.AddUnit(map, v % 2, pw, v / 2) < 0) { error = "unit in an impossible place"; return false; }
+                int nu = s.AddUnit(map, v % unitBase, pw, v / unitBase);
+                if (nu < 0) { error = "unit in an impossible place"; return false; }
                 i += 2;
+                if (map.extended)
+                {
+                    int f = i < units.Length ? Val(units[i]) : -1;
+                    if (f < 0) { error = "bad unit list"; return false; }
+                    s.unitFlag[nu] = f; i++;
+                }
             }
 
             // ---- owners ----
@@ -275,7 +367,7 @@ namespace Parley.Engine
             {
                 int dash = retreats.IndexOf('-');
                 if (dash < 0) { error = "bad retreat list"; return false; }
-                int step = 4 + powerWidth;
+                int step = 4 + powerWidth + (map.extended ? 1 : 0);
                 i = 0;
                 while (i < dash)
                 {
@@ -283,10 +375,17 @@ namespace Parley.Engine
                     int dp = DecPower(retreats, i + 2);
                     int from = Dec2(retreats, i + 2 + powerWidth);
                     if (v < 0 || dp < 0 || from < 0 || from > map.provCount || i + step > dash) { error = "bad retreat list"; return false; }
-                    if (!map.CanStand(v % 2, v / 2)) { error = "bad retreat list"; return false; }
+                    if (!map.CanStand(v % unitBase, v / unitBase)) { error = "bad retreat list"; return false; }
                     int d = s.disCount;
                     if (d >= s.disLoc.Length) { error = "bad retreat list"; return false; }
-                    s.disType[d] = v % 2; s.disLoc[d] = v / 2; s.disPower[d] = dp; s.disFrom[d] = from - 1;
+                    s.disType[d] = v % unitBase; s.disLoc[d] = v / unitBase; s.disPower[d] = dp; s.disFrom[d] = from - 1;
+                    s.disFlag[d] = 0;
+                    if (map.extended)
+                    {
+                        int df = Val(retreats[i + step - 1]);
+                        if (df < 0) { error = "bad retreat list"; return false; }
+                        s.disFlag[d] = df;
+                    }
                     s.disCount = d + 1;
                     i += step;
                 }
@@ -342,6 +441,9 @@ namespace Parley.Engine
                     else if (t == Adjudicator.SUPPORT_HOLD) { if (a >= 0) r += who + "s" + Enc2(a); }
                     else if (t == Adjudicator.SUPPORT_MOVE) { if (a >= 0 && b >= 0) r += who + "t" + Enc2(a) + Enc2(b); }
                     else if (t == Adjudicator.CONVOY) { if (a >= 0 && b >= 0) r += who + "c" + Enc2(a) + Enc2(b); }
+                    else if (t == Adjudicator.CONVERT) { if (a >= 0 && b >= 0) r += who + "x" + Enc2(a) + Enc2(b); }
+                    else if (t == Adjudicator.BESIEGE) r += who + "b";
+                    else if (t == Adjudicator.LIFT_SIEGE) r += who + "l";
                 }
             }
             else if (s.phase == BoardState.PHASE_RETREAT)
@@ -385,9 +487,9 @@ namespace Parley.Engine
                     int loc = Dec2(text, i);
                     if (loc < 0 || loc >= map.locCount || i + 3 > n) { error = "bad orders"; return false; }
                     char k = text[i + 2];
-                    int need = (k == 'm' || k == 'v' || k == 's') ? 2 : ((k == 't' || k == 'c') ? 4 : -1);
+                    int need = (k == 'm' || k == 'v' || k == 's') ? 2 : ((k == 't' || k == 'c' || k == 'x') ? 4 : ((k == 'b' || k == 'l') ? 0 : -1));
                     if (need < 0 || i + 3 + need > n) { error = "bad orders"; return false; }
-                    int a = Dec2(text, i + 3);
+                    int a = need >= 2 ? Dec2(text, i + 3) : 0;
                     int b = need == 4 ? Dec2(text, i + 5) : 0;
                     if (a < 0 || b < 0) { error = "bad orders"; return false; }
                     i += 3 + need;
@@ -397,6 +499,9 @@ namespace Parley.Engine
                     if (k == 'm' || k == 'v') { if (a < map.locCount) adj.SetMove(u, a, k == 'v'); }
                     else if (k == 's') { if (a < map.provCount) adj.SetSupportHold(u, a); }
                     else if (k == 't') { if (a < map.provCount && b < map.locCount) adj.SetSupportMove(u, a, b); }
+                    else if (k == 'x') { if (a < map.locCount && b < map.unitTypeCount) adj.SetConvert(u, a, b); }
+                    else if (k == 'b') adj.SetBesiege(u);
+                    else if (k == 'l') adj.SetLiftSiege(u);
                     else { if (a < map.provCount && b < map.provCount) adj.SetConvoy(u, a, b); }
                 }
             }

@@ -29,6 +29,12 @@ namespace Parley.Engine
         public const int SUPPORT_HOLD = 2;  // oA = province of the unit being supported
         public const int SUPPORT_MOVE = 3;  // oA = province of the moving unit, oB = its destination loc
         public const int CONVOY = 4;        // oA = province of the army, oB = destination province
+        // Orders that only exist in rulesets with walled cities. The referee treats a
+        // conversion as a move between a province and the city inside it; besieging and
+        // lifting a siege are holds here, and the ruleset decides what they achieve.
+        public const int CONVERT = 5;       // oA = where the unit ends up (the city, or the province or coast outside), oB = the unit type it becomes
+        public const int BESIEGE = 6;
+        public const int LIFT_SIEGE = 7;
 
         // ---- per-order result ----
         public const int R_OK = 0;       // did what it was told
@@ -54,6 +60,17 @@ namespace Parley.Engine
         public int[] oA;
         public int[] oB;
         public bool[] oVia;
+        /// <summary>Per unit: its strength (1 unless the ruleset says otherwise). Reset by ClearOrders.</summary>
+        public int[] uStr;
+        /// <summary>Per unit: extra strength for its own move only (0 unless the ruleset says otherwise).</summary>
+        public int[] uBonus;
+        /// <summary>
+        /// True (the standard game): after a phase the referee moves the calendar on itself.
+        /// False: it stops when a season's moves and retreats are done and sets
+        /// <see cref="seasonDone"/>, so that the ruleset can do its own bookkeeping first.
+        /// </summary>
+        public bool autoAdvance = true;
+        public bool seasonDone;
 
         // ---- input: retreat orders, indexed like BoardState dislodged units (loc, or -1 = disband) ----
         public int[] retDest;
@@ -96,13 +113,16 @@ namespace Parley.Engine
         private int[] cvHead; private int[] cvNext;   // convoying fleets of each army
         private int[] queue; private bool[] seen; private int[] stackNode; private int[] stackIter; private bool[] onPath;
         private int[] tmp; private int[] nodeOf; private bool[] reach; private int[] dist;
-        private int[] nuType; private int[] nuPower; private int[] nuLoc;
+        private int[] nuType; private int[] nuPower; private int[] nuLoc; private int[] nuFlag;
+        private int[] newType;   // unit type a mover becomes on arrival (conversions), or -1
 
         public void Init(MapData m)
         {
             map = m;
             cap = m.provCount;
             oType = new int[cap]; oA = new int[cap]; oB = new int[cap]; oVia = new bool[cap];
+            uStr = new int[cap]; uBonus = new int[cap]; nuFlag = new int[cap]; newType = new int[cap];
+            autoAdvance = true; seasonDone = false;
             retDest = new int[cap];
             int acap = cap * 2 + m.powerCount + 8;
             adjPower = new int[acap]; adjKind = new int[acap]; adjLoc = new int[acap]; adjOk = new bool[acap];
@@ -129,7 +149,7 @@ namespace Parley.Engine
         /// <summary>Resets every order: all units hold, all retreats disband, no builds.</summary>
         public void ClearOrders()
         {
-            for (int i = 0; i < cap; i++) { oType[i] = HOLD; oA[i] = -1; oB[i] = -1; oVia[i] = false; retDest[i] = -1; }
+            for (int i = 0; i < cap; i++) { oType[i] = HOLD; oA[i] = -1; oB[i] = -1; oVia[i] = false; retDest[i] = -1; uStr[i] = 1; uBonus[i] = 0; }
             adjCount = 0;
         }
 
@@ -138,6 +158,9 @@ namespace Parley.Engine
         public void SetSupportHold(int unit, int targetProv) { oType[unit] = SUPPORT_HOLD; oA[unit] = targetProv; oB[unit] = -1; oVia[unit] = false; }
         public void SetSupportMove(int unit, int fromProv, int destLoc) { oType[unit] = SUPPORT_MOVE; oA[unit] = fromProv; oB[unit] = destLoc; oVia[unit] = false; }
         public void SetConvoy(int unit, int armyProv, int destProv) { oType[unit] = CONVOY; oA[unit] = armyProv; oB[unit] = destProv; oVia[unit] = false; }
+        public void SetConvert(int unit, int destLoc, int becomesType) { oType[unit] = CONVERT; oA[unit] = destLoc; oB[unit] = becomesType; oVia[unit] = false; }
+        public void SetBesiege(int unit) { oType[unit] = BESIEGE; oA[unit] = -1; oB[unit] = -1; oVia[unit] = false; }
+        public void SetLiftSiege(int unit) { oType[unit] = LIFT_SIEGE; oA[unit] = -1; oB[unit] = -1; oVia[unit] = false; }
         public void SetRetreat(int dislodgedIndex, int destLoc) { retDest[dislodgedIndex] = destLoc; }
 
         public void AddAdjust(int power, int kind, int loc)
@@ -161,6 +184,7 @@ namespace Parley.Engine
         public void ResolveMovement(BoardState s)
         {
             int n = s.unitCount;
+            seasonDone = false;
             PrepareOrders(s);
 
             // Answer every question that can be answered; when stuck, apply the backup rule.
@@ -183,7 +207,7 @@ namespace Parley.Engine
                 rMoved[u] = eff[u] == MOVE && moveDec[u] == YES;
                 rDislodged[u] = disDec[u] == YES;
                 int st = R_OK;
-                if (oType[u] != HOLD && eff[u] == HOLD) st = R_VOID;
+                if (oType[u] != HOLD && eff[u] == HOLD && !HoldLike(s, u)) st = R_VOID;
                 else if (eff[u] == MOVE) { if (moveDec[u] != YES) st = pathDec[u] == NO ? R_NO_PATH : R_BOUNCED; }
                 else if (eff[u] == SUPPORT_HOLD || eff[u] == SUPPORT_MOVE) { if (supDec[u] != YES) st = R_CUT; }
                 else if (eff[u] == CONVOY) { if (convFail[u] || disDec[u] == YES) st = R_NO_PATH; }
@@ -198,7 +222,7 @@ namespace Parley.Engine
                 if (rDislodged[u])
                 {
                     int d = s.disCount;
-                    s.disType[d] = s.unitType[u]; s.disPower[d] = s.unitPower[u]; s.disLoc[d] = s.unitLoc[u];
+                    s.disType[d] = s.unitType[u]; s.disPower[d] = s.unitPower[u]; s.disLoc[d] = s.unitLoc[u]; s.disFlag[d] = s.unitFlag[u];
                     int from = -1;
                     int p = map.locProv[s.unitLoc[u]];
                     for (int x = mvHead[p]; x >= 0; x = mvNext[x])
@@ -208,8 +232,8 @@ namespace Parley.Engine
                 }
                 else
                 {
-                    nuType[nn] = s.unitType[u]; nuPower[nn] = s.unitPower[u];
-                    nuLoc[nn] = rMoved[u] ? dest[u] : s.unitLoc[u];
+                    nuType[nn] = rMoved[u] && newType[u] >= 0 ? newType[u] : s.unitType[u]; nuPower[nn] = s.unitPower[u];
+                    nuLoc[nn] = rMoved[u] ? dest[u] : s.unitLoc[u]; nuFlag[nn] = s.unitFlag[u];
                     nn++;
                 }
             }
@@ -222,7 +246,7 @@ namespace Parley.Engine
                 s.contested[p] = bounced;
             }
             s.unitCount = nn;
-            for (int u = 0; u < nn; u++) { s.unitType[u] = nuType[u]; s.unitPower[u] = nuPower[u]; s.unitLoc[u] = nuLoc[u]; }
+            for (int u = 0; u < nn; u++) { s.unitType[u] = nuType[u]; s.unitPower[u] = nuPower[u]; s.unitLoc[u] = nuLoc[u]; s.unitFlag[u] = nuFlag[u]; }
             s.Reindex(map);
             for (int p = 0; p < map.provCount; p++) if (s.provUnit[p] >= 0) s.contested[p] = false;
 
@@ -248,7 +272,7 @@ namespace Parley.Engine
             {
                 eff[u] = HOLD; dest[u] = -1; conv[u] = false; convLegal[u] = false; supUnit[u] = -1; convArmy[u] = -1; h2h[u] = -1;
                 mvNext[u] = -1; supHead[u] = -1; supNext[u] = -1; cvHead[u] = -1; cvNext[u] = -1;
-                convFail[u] = false;
+                convFail[u] = false; newType[u] = -1;
             }
 
             // 1. which convoy orders are possible at all on this board?
@@ -258,9 +282,18 @@ namespace Parley.Engine
                 convLegal[u] = ConvoyOrderLegal(s, u, oA[u], oB[u]);
             }
 
-            // 2. moves
+            // 2. moves (a conversion is a move between a province and the city inside it)
             for (int u = 0; u < n; u++)
             {
+                if (oType[u] == CONVERT)
+                {
+                    int cd = ConvertTarget(s, u);
+                    if (cd < 0 || map.locProv[cd] == map.locProv[s.unitLoc[u]]) continue; // impossible, or a change on the spot
+                    eff[u] = MOVE; dest[u] = cd; newType[u] = oB[u];
+                    int cdp = map.locProv[cd];
+                    mvNext[u] = mvHead[cdp]; mvHead[cdp] = u;
+                    continue;
+                }
                 if (oType[u] != MOVE) continue;
                 int d = oA[u];
                 if (d < 0 || d >= map.locCount) continue;
@@ -287,10 +320,11 @@ namespace Parley.Engine
                         conv[u] = c;
                     }
                 }
-                else
+                else if (s.unitType[u] == MapData.FLEET)
                 {
                     if (!map.FleetAdjacent(s.unitLoc[u], d)) continue;
                 }
+                else continue; // a garrison leaves its city only by converting
                 eff[u] = MOVE; dest[u] = d;
                 mvNext[u] = mvHead[dp]; mvHead[dp] = u;
             }
@@ -354,7 +388,44 @@ namespace Parley.Engine
         private bool CanReach(BoardState s, int u, int prov)
         {
             if (s.unitType[u] == MapData.ARMY) return map.provType[prov] != MapData.SEA && map.ArmyAdjacent(map.locProv[s.unitLoc[u]], prov);
+            if (s.unitType[u] == MapData.GARRISON) return map.cityProv[map.locProv[s.unitLoc[u]]] == prov; // only the province around its city
             return map.FleetCanReachProv(s.unitLoc[u], prov);
+        }
+
+        /// <summary>
+        /// Where a conversion order takes unit u: the city entry (army or fleet becoming a
+        /// garrison), a place in the province outside (garrison becoming an army or fleet),
+        /// the unit's own place (a change on the spot, where city and province are one
+        /// space), or -1 if the order is impossible. Entering a city that already has a
+        /// garrison is impossible: garrisons are removed by siege, never pushed out.
+        /// </summary>
+        public int ConvertTarget(BoardState s, int u)
+        {
+            int to = oB[u]; int d = oA[u];
+            int loc = s.unitLoc[u]; int p = map.locProv[loc];
+            int type = s.unitType[u];
+            if (to == type || to < 0 || to >= map.unitTypeCount || d < 0 || d >= map.locCount) return -1;
+            if ((to == MapData.FLEET || type == MapData.FLEET) && !map.cityPort[p]) return -1; // fleets need a port
+            if (map.provSingle[p])
+            {
+                if (map.locProv[d] != p || !map.CanStand(to, d)) return -1;
+                return loc; // same space: the ruleset changes the type if the unit is left in peace
+            }
+            if (type == MapData.GARRISON)
+            {
+                if (to == MapData.GARRISON || map.locProv[d] != map.cityProv[p] || !map.CanStand(to, d)) return -1;
+                return to == MapData.ARMY ? map.locProv[d] : d;
+            }
+            if (to != MapData.GARRISON || map.provCity[p] < 0 || d != map.provCity[p]) return -1;
+            if (s.provUnit[d] >= 0) return -1;
+            return d;
+        }
+
+        // Orders that keep the unit where it is without being a mistake.
+        private bool HoldLike(BoardState s, int u)
+        {
+            if (oType[u] == BESIEGE || oType[u] == LIFT_SIEGE) return true;
+            return oType[u] == CONVERT && map.provSingle[map.locProv[s.unitLoc[u]]] && ConvertTarget(s, u) >= 0;
         }
 
         /// <summary>One pass over all units, answering whatever can now be answered. True if anything new was learned.</summary>
@@ -421,7 +492,7 @@ namespace Parley.Engine
             for (int x = supHead[u]; x >= 0; x = supNext[x])
             {
                 if (s.unitPower[x] == exceptPower) continue;
-                if (supDec[x] == YES || (max && supDec[x] == UND)) c++;
+                if (supDec[x] == YES || (max && supDec[x] == UND)) c += uStr[x];
             }
             return c;
         }
@@ -430,13 +501,15 @@ namespace Parley.Engine
         {
             if (max) { if (pathDec[u] == NO) return 0; }
             else if (pathDec[u] != YES) return 0;
+            int own = uStr[u] + uBonus[u];
             int t = s.provUnit[map.locProv[dest[u]]];
-            if (t < 0) return 1 + Supports(s, u, max, -1);
+            if (t < 0) return own + Supports(s, u, max, -1);
             bool leaves = false;
             if (eff[t] == MOVE && h2h[u] < 0) leaves = max ? moveDec[t] != NO : moveDec[t] == YES;
-            if (leaves) return 1 + Supports(s, u, max, -1);
+            if (leaves) return own + Supports(s, u, max, -1);
             if (s.unitPower[t] == s.unitPower[u]) return 0; // never dislodge your own unit
-            return 1 + Supports(s, u, max, s.unitPower[t]); // its owner's supports don't help dislodge it
+            if (s.unitType[t] == MapData.GARRISON) return 0; // a garrison is never pushed out by force
+            return own + Supports(s, u, max, s.unitPower[t]); // its owner's supports don't help dislodge it
         }
 
         private int Hold(BoardState s, int prov, bool max)
@@ -445,10 +518,10 @@ namespace Parley.Engine
             if (t < 0) return 0;
             if (eff[t] == MOVE)
             {
-                if (max) return moveDec[t] == YES ? 0 : 1;
-                return moveDec[t] == NO ? 1 : 0;
+                if (max) return moveDec[t] == YES ? 0 : uStr[t];
+                return moveDec[t] == NO ? uStr[t] : 0;
             }
-            return 1 + Supports(s, t, max, -1);
+            return uStr[t] + Supports(s, t, max, -1);
         }
 
         private int PreventS(BoardState s, int u, bool max)
@@ -462,7 +535,7 @@ namespace Parley.Engine
                 if (max) { if (moveDec[o] == YES) return 0; }
                 else if (moveDec[o] != NO) return 0;
             }
-            return 1 + Supports(s, u, max, -1);
+            return uStr[u] + uBonus[u] + Supports(s, u, max, -1);
         }
 
         private void EvalMove(BoardState s, int u)
@@ -474,8 +547,8 @@ namespace Parley.Engine
             int o = h2h[u];
             if (o >= 0)
             {
-                if (aMin <= 1 + Supports(s, o, true, -1)) win = false;
-                if (aMax <= 1 + Supports(s, o, false, -1)) lose = true;
+                if (aMin <= uStr[o] + uBonus[o] + Supports(s, o, true, -1)) win = false;
+                if (aMax <= uStr[o] + uBonus[o] + Supports(s, o, false, -1)) lose = true;
             }
             else
             {
@@ -536,17 +609,18 @@ namespace Parley.Engine
             {
                 seen[f] = false;
                 if (!FleetUsable(f, max)) continue;
-                if (map.SeaAdjacent(src, map.locProv[s.unitLoc[f]])) { seen[f] = true; queue[qt] = f; qt++; }
+                // Links are checked place by place, not province by province, so that a fleet
+                // standing on one coast of a province cannot carry an army across to its other coast.
+                if (map.FleetCanReachProv(s.unitLoc[f], src)) { seen[f] = true; queue[qt] = f; qt++; }
             }
             while (qh < qt)
             {
                 int f = queue[qh]; qh++;
-                int fp = map.locProv[s.unitLoc[f]];
-                if (map.SeaAdjacent(fp, dst)) return true;
+                if (map.FleetCanReachProv(s.unitLoc[f], dst)) return true;
                 for (int g = cvHead[u]; g >= 0; g = cvNext[g])
                 {
                     if (seen[g] || !FleetUsable(g, max)) continue;
-                    if (map.SeaAdjacent(fp, map.locProv[s.unitLoc[g]])) { seen[g] = true; queue[qt] = g; qt++; }
+                    if (map.FleetAdjacent(s.unitLoc[f], s.unitLoc[g])) { seen[g] = true; queue[qt] = g; qt++; }
                 }
             }
             return false;
@@ -685,7 +759,7 @@ namespace Parley.Engine
 
         private bool SeaFleetAt(BoardState s, int prov)
         {
-            if (map.provType[prov] != MapData.SEA) return false;
+            if (map.provType[prov] != MapData.SEA && !(map.coastConvoy && map.provType[prov] == MapData.COAST)) return false;
             int u = s.provUnit[prov];
             return u >= 0 && s.unitType[u] == MapData.FLEET;
         }
@@ -700,7 +774,7 @@ namespace Parley.Engine
             if (armyProv < 0 || armyProv >= map.provCount || destProv < 0 || destProv >= map.provCount) return false;
             if (s.unitType[u] != MapData.FLEET) return false;
             int fp = map.locProv[s.unitLoc[u]];
-            if (map.provType[fp] != MapData.SEA) return false;
+            if (!SeaFleetAt(s, fp)) return false;
             int a = s.provUnit[armyProv];
             if (a < 0 || s.unitType[a] != MapData.ARMY) return false;
             if (armyProv == destProv) return false;
@@ -785,11 +859,30 @@ namespace Parley.Engine
         public bool RetreatValid(BoardState s, int d, int loc)
         {
             if (loc < 0 || loc >= map.locCount) return false;
+            int dp = map.locProv[loc];
+            int sp = map.locProv[s.disLoc[d]];
+            if (map.provType[dp] == MapData.CITY)
+            {
+                // Into the city of its own province, becoming a garrison: only when there is nowhere else to go.
+                if (dp != map.provCity[sp] || loc != dp) return false;
+                if (s.disType[d] == MapData.FLEET && !map.cityPort[sp]) return false;
+                if (s.provUnit[dp] >= 0 || s.contested[dp] || dp == s.disFrom[d]) return false;
+                for (int l = 0; l < map.locCount; l++)
+                    if (map.provType[map.locProv[l]] != MapData.CITY && OpenRetreat(s, d, l)) return false;
+                return true;
+            }
+            return OpenRetreat(s, d, loc);
+        }
+
+        // The ordinary retreat rule: next door, empty, not fought over, not where the attacker came from.
+        private bool OpenRetreat(BoardState s, int d, int loc)
+        {
             if (!map.CanStand(s.disType[d], loc)) return false;
             int dp = map.locProv[loc];
             int sp = map.locProv[s.disLoc[d]];
             if (s.disType[d] == MapData.ARMY) { if (!map.ArmyAdjacent(sp, dp)) return false; }
-            else if (!map.FleetAdjacent(s.disLoc[d], loc)) return false;
+            else if (s.disType[d] == MapData.FLEET) { if (!map.FleetAdjacent(s.disLoc[d], loc)) return false; }
+            else return false;
             if (s.provUnit[dp] >= 0) return false;   // occupied
             if (s.contested[dp]) return false;       // left empty by a standoff
             if (dp == s.disFrom[d]) return false;    // where the attacker came from
@@ -805,7 +898,7 @@ namespace Parley.Engine
                 retOk[d] = RetreatValid(s, d, retDest[d]);
                 if (retOk[d])
                 {
-                    if (s.disType[d] == MapData.ARMY) retDest[d] = map.locProv[retDest[d]];
+                    if (s.disType[d] != MapData.FLEET) retDest[d] = map.locProv[retDest[d]];
                     tmp[map.locProv[retDest[d]]]++;
                 }
             }
@@ -813,7 +906,12 @@ namespace Parley.Engine
             for (int d = 0; d < n; d++)
                 if (retOk[d] && tmp[map.locProv[retDest[d]]] != 1) retOk[d] = false;
             for (int d = 0; d < n; d++)
-                if (retOk[d]) s.AddUnit(map, s.disType[d], s.disPower[d], retDest[d]);
+            {
+                if (!retOk[d]) continue;
+                bool intoCity = map.provType[map.locProv[retDest[d]]] == MapData.CITY;
+                int nu = s.AddUnit(map, intoCity ? MapData.GARRISON : s.disType[d], s.disPower[d], retDest[d]);
+                if (nu >= 0) s.unitFlag[nu] = s.disFlag[d];
+            }
             AfterRetreats(s);
         }
 
@@ -821,27 +919,51 @@ namespace Parley.Engine
         {
             s.disCount = 0;
             for (int p = 0; p < map.provCount; p++) s.contested[p] = false;
-            if (s.season == BoardState.SPRING)
+            s.phase = BoardState.PHASE_MOVE;
+            seasonDone = true;
+            if (autoAdvance) AdvanceSeason(s);
+        }
+
+        /// <summary>
+        /// The standard calendar, driven by the map's season list: when a season's moves
+        /// and retreats are done, centres change hands if this season says so (which is
+        /// also when a winner is looked for); after the year's last season comes the
+        /// adjustment phase if anybody has builds or removals; otherwise the next season.
+        /// A ruleset with its own bookkeeping switches <see cref="autoAdvance"/> off and
+        /// calls <see cref="NextSeason"/> when it is ready.
+        /// </summary>
+        public void AdvanceSeason(BoardState s)
+        {
+            int last = map.seasonCount - 1;
+            if (s.season >= 0 && s.season <= last && map.seasonCapture[s.season])
             {
-                s.season = BoardState.FALL; s.phase = BoardState.PHASE_MOVE;
-                return;
+                for (int u = 0; u < s.unitCount; u++)
+                {
+                    int p = map.locProv[s.unitLoc[u]];
+                    if (map.provSc[p]) s.owner[p] = s.unitPower[u];
+                }
+                int w = FindWinner(s);
+                if (w >= 0)
+                {
+                    s.winner = w; s.season = map.seasonCount; s.phase = BoardState.PHASE_FINISHED;
+                    return;
+                }
             }
-            // end of the year: centres change hands
-            for (int u = 0; u < s.unitCount; u++)
+            if (s.season >= last)
             {
-                int p = map.locProv[s.unitLoc[u]];
-                if (map.provSc[p]) s.owner[p] = s.unitPower[u];
+                bool any = false;
+                for (int pw = 0; pw < map.powerCount && !any; pw++) if (AdjustDelta(s, pw) != 0) any = true;
+                if (any) { s.season = map.seasonCount; s.phase = BoardState.PHASE_ADJUST; return; }
             }
-            int w = FindWinner(s);
-            if (w >= 0)
-            {
-                s.winner = w; s.season = BoardState.WINTER; s.phase = BoardState.PHASE_FINISHED;
-                return;
-            }
-            bool any = false;
-            for (int pw = 0; pw < map.powerCount && !any; pw++) if (AdjustDelta(s, pw) != 0) any = true;
-            if (any) { s.season = BoardState.WINTER; s.phase = BoardState.PHASE_ADJUST; }
-            else { s.year = s.year + 1; s.season = BoardState.SPRING; s.phase = BoardState.PHASE_MOVE; }
+            NextSeason(s);
+        }
+
+        /// <summary>Moves the date to the next movement season (the first season of the next year after the last).</summary>
+        public void NextSeason(BoardState s)
+        {
+            if (s.season >= map.seasonCount - 1) { s.year = s.year + 1; s.season = 0; }
+            else s.season = s.season + 1;
+            s.phase = BoardState.PHASE_MOVE;
         }
 
         /// <summary>The power that has reached the victory target (most centres wins a tie-free race), or -1.</summary>
@@ -936,7 +1058,8 @@ namespace Parley.Engine
                 }
             }
             adjCount = 0;
-            s.year = s.year + 1; s.season = BoardState.SPRING; s.phase = BoardState.PHASE_MOVE;
+            s.season = map.seasonCount; // the adjustment time closes the year
+            NextSeason(s);
         }
 
         /// <summary>
