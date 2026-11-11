@@ -12,6 +12,8 @@ static int Usage()
           parley import-dpjudge <in.map> <out.pmap> [id] [name...]
                                                 convert a DPjudge-format map
           parley check-map <file.pmap>          load a map and print a summary
+          parley gen-ring <players> [isthmus] [out.pmap]
+                                                generate an original Ring map
         """);
     return 2;
 }
@@ -50,6 +52,18 @@ switch (args[0])
             var map = new Parley.Engine.MapData();
             if (!map.Load(File.ReadAllText(args[1]))) { Console.WriteLine("error: " + map.error); return 1; }
             Console.WriteLine($"{map.mapName} [{map.mapId}#{map.hash}]: {map.provCount} provinces, {map.locCount - map.provCount} extra coasts, {map.scCount} centres (victory {map.victoryCenters}), {map.powerCount} powers, {map.startUnitCount} starting units");
+            return 0;
+        }
+    case "gen-ring":
+        {
+            if (args.Length < 2 || !int.TryParse(args[1], out int np)) return Usage();
+            bool isthmus = args.Contains("isthmus");
+            var text = RingMapGenerator.Generate(np, isthmus);
+            var map = new Parley.Engine.MapData();
+            if (!map.Load(text)) { Console.WriteLine("generated map does not load: " + map.error); return 1; }
+            var outPath = args.Skip(2).FirstOrDefault(a => a.EndsWith(".pmap"));
+            if (outPath == null) Console.Write(text);
+            else { File.WriteAllText(outPath, text); Console.WriteLine($"wrote {outPath}: {map.provCount} provinces, {map.scCount} centres, {map.powerCount} powers [{map.mapId}#{map.hash}]"); }
             return 0;
         }
     default:
