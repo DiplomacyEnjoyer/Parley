@@ -20,6 +20,8 @@ static int Usage()
                                                 play bot games; checks + per-power statistics
           parley crosscheck-export <file.pmap> [count] [seed]
                                                 write random situations + verdicts as JSON lines
+          parley crosscheck-games <file.pmap> [games] [seed] [years]
+                                                write whole bot games (all phase types) as JSON lines
           parley gen-ring <players> [isthmus] [out.pmap]
                                                 generate an original Ring map
         """);
@@ -94,6 +96,13 @@ switch (args[0])
                 catch (Exception ex) { Console.WriteLine("no picture: " + ex.Message); }
                 finally { File.Delete(tmp); }
             }
+            return 0;
+        }
+    case "crosscheck-games":
+        {
+            if (args.Length < 2) return Usage();
+            CrossCheck.ExportGames(File.ReadAllText(args[1]), args.Length > 2 ? int.Parse(args[2]) : 50, args.Length > 3 ? int.Parse(args[3]) : 1,
+                args.Length > 4 ? int.Parse(args[4]) : 12, Console.Out);
             return 0;
         }
     case "check-map":

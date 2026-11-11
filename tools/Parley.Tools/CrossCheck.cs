@@ -76,4 +76,95 @@ public static class CrossCheck
             }
         }
     }
+
+    /// <summary>
+    /// Writes whole bot games, phase by phase (movement, retreats and builds), as JSON lines:
+    /// the orders of every phase and the position after it. A second engine replays each game
+    /// from the start and compares the position after every phase (scripts/crosscheck_games.py).
+    /// </summary>
+    public static void ExportGames(string pmapText, int games, int seed, int maxYears, TextWriter output)
+    {
+        for (int gi = 0; gi < games; gi++)
+        {
+            var g = Game.FromPmap(pmapText);
+            var map = g.Map; var s = g.State; var adj = g.Adj;
+            var rng = new Random(seed * 1000003 + gi);
+            var basic = new Bot(g, rng, true);
+            var wild = new Bot(g, rng, false);
+            string U(int type, int loc) => Notation.TypeLetter(type) + " " + map.locId[loc].ToUpperInvariant();
+            string P(int p) => map.powerId[p].ToUpperInvariant();
+            var phases = new List<object>();
+            while (s.phase != BoardState.PHASE_FINISHED && s.year < map.startYear + maxYears)
+            {
+                string label = s.PhaseLabel();
+                var orders = new Dictionary<string, List<string>>();
+                for (int p = 0; p < map.powerCount; p++) orders[P(p)] = new();
+                adj.ClearOrders();
+                // movement: a mix of sensible and wild orders; retreats and builds: sensible
+                var bot = s.phase == BoardState.PHASE_MOVE && rng.Next(3) == 0 ? wild : basic;
+                for (int p = 0; p < map.powerCount; p++) g.Codec.DecodeOrders(bot.Choose(p), s, adj, p);
+                // in half the games every required disband is ordered, so builds and disbands are
+                // compared without the forced-disband rule (where rulebook editions differ)
+                if (s.phase == BoardState.PHASE_ADJUST && gi % 2 == 0)
+                    for (int p = 0; p < map.powerCount; p++)
+                    {
+                        int need = -adj.AdjustDelta(s, p);
+                        var have = new HashSet<int>();
+                        for (int i = 0; i < adj.adjCount; i++) if (adj.adjPower[i] == p && adj.adjKind[i] == Adjudicator.ADJ_DISBAND) have.Add(map.locProv[adj.adjLoc[i]]);
+                        for (int u = 0; u < s.unitCount && have.Count < need; u++)
+                            if (s.unitPower[u] == p && have.Add(map.locProv[s.unitLoc[u]])) adj.AddAdjust(p, Adjudicator.ADJ_DISBAND, s.unitLoc[u]);
+                    }
+                if (s.phase == BoardState.PHASE_MOVE)
+                {
+                    for (int u = 0; u < s.unitCount; u++)
+                    {
+                        // "via convoy" to a neighbouring province is where rulebook editions differ (DECISIONS §7)
+                        if (adj.oType[u] == Adjudicator.MOVE && adj.oVia[u] && s.unitType[u] == MapData.ARMY
+                            && map.ArmyAdjacent(map.locProv[s.unitLoc[u]], map.locProv[adj.oA[u]])) adj.oVia[u] = false;
+                        string me = U(s.unitType[u], s.unitLoc[u]);
+                        int a = adj.oA[u], b = adj.oB[u];
+                        string text = me + " H";
+                        switch (adj.oType[u])
+                        {
+                            case Adjudicator.MOVE: text = me + " - " + map.locId[a].ToUpperInvariant() + (adj.oVia[u] ? " VIA" : ""); break;
+                            case Adjudicator.SUPPORT_HOLD: { int t = s.provUnit[a]; if (t >= 0) text = me + " S " + U(s.unitType[t], s.unitLoc[t]); break; }
+                            case Adjudicator.SUPPORT_MOVE: { int t = s.provUnit[a]; if (t >= 0) text = me + " S " + U(s.unitType[t], s.unitLoc[t]) + " - " + map.provId[map.locProv[b]].ToUpperInvariant(); break; }
+                            case Adjudicator.CONVOY: { int t = s.provUnit[a]; if (t >= 0) text = me + " C " + U(s.unitType[t], s.unitLoc[t]) + " - " + map.provId[b].ToUpperInvariant(); break; }
+                        }
+                        orders[P(s.unitPower[u])].Add(text);
+                    }
+                }
+                else if (s.phase == BoardState.PHASE_RETREAT)
+                {
+                    for (int d = 0; d < s.disCount; d++)
+                        orders[P(s.disPower[d])].Add(U(s.disType[d], s.disLoc[d]) + (adj.retDest[d] >= 0 ? " R " + map.locId[adj.retDest[d]].ToUpperInvariant() : " D"));
+                }
+                else if (s.phase == BoardState.PHASE_ADJUST)
+                {
+                    for (int i = 0; i < adj.adjCount; i++)
+                    {
+                        int k = adj.adjKind[i], loc = adj.adjLoc[i];
+                        string text = k == Adjudicator.ADJ_BUILD_ARMY ? U(MapData.ARMY, loc) + " B"
+                            : k == Adjudicator.ADJ_BUILD_FLEET ? U(MapData.FLEET, loc) + " B"
+                            : k == Adjudicator.ADJ_DISBAND ? (s.provUnit[map.locProv[loc]] >= 0 ? U(s.unitType[s.provUnit[map.locProv[loc]]], s.unitLoc[s.provUnit[map.locProv[loc]]]) + " D" : "")
+                            : "WAIVE";
+                        if (text != "") orders[P(adj.adjPower[i])].Add(text);
+                    }
+                }
+                int phaseBefore = s.phase;
+                adj.Resolve(s);
+                var units = new Dictionary<string, List<string>>(); var centres = new Dictionary<string, List<string>>();
+                for (int p = 0; p < map.powerCount; p++) { units[P(p)] = new(); centres[P(p)] = new(); }
+                for (int u = 0; u < s.unitCount; u++) units[P(s.unitPower[u])].Add(U(s.unitType[u], s.unitLoc[u]));
+                if (s.phase == BoardState.PHASE_RETREAT)
+                    for (int d = 0; d < s.disCount; d++) units[P(s.disPower[d])].Add("*" + U(s.disType[d], s.disLoc[d]));
+                for (int pv = 0; pv < map.provCount; pv++) if (s.owner[pv] >= 0) centres[P(s.owner[pv])].Add(map.provId[pv].ToUpperInvariant());
+                var forced = new List<string>();
+                if (phaseBefore == BoardState.PHASE_ADJUST)
+                    for (int i = 0; i < adj.autoDisbandCount; i++) forced.Add(P(adj.autoDisbandPower[i]));
+                phases.Add(new { label, orders, units, centres, next = s.PhaseLabel(), forced });
+            }
+            output.WriteLine(JsonSerializer.Serialize(new { game = gi, phases }));
+        }
+    }
 }

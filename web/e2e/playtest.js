@@ -75,7 +75,14 @@ async function newPlayer(label) {
   return { ctx, page, label };
 }
 const state = p => p.page.evaluate(() => S);
-const waitFor = (p, fn, arg, ms = 60000) => p.page.waitForFunction(fn, arg, { timeout: ms, polling: 250 });
+async function waitFor(p, fn, arg, ms = 60000) {
+  try { return await p.page.waitForFunction(fn, arg, { timeout: ms, polling: 250 }); }
+  catch (e) {
+    let info = '';
+    try { info = await p.page.evaluate(() => JSON.stringify({ stage: S.stage, label: S.label, left: S.secondsLeft, my: S.my && { sub: S.my.submitted, sealed: S.my.sealedOrders, opened: S.my.opened, needs: S.my.needs }, seats: S.seats.map(x => [x.name, x.present ? 'here' : 'away', x.needs ? 'needs' : '', x.submitted ? 'sub' : '', x.opened ? 'open' : '', x.ready ? 'ready' : ''].filter(Boolean).join(' ')), flash })); } catch { }
+    throw new Error(`${p.label}: timed out waiting for ${String(fn).slice(0, 80)} | page: ${info}`);
+  }
+}
 async function joinAndSit(p, url, name, seat) {
   await p.page.goto(url); await p.page.waitForSelector('#jName');
   await p.page.fill('#jName', name); await p.page.click('#jGo');
