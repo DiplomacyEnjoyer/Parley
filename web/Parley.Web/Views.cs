@@ -48,70 +48,69 @@ public static class Views
     {
         var g = wg.G; var f = g.Flow; var s = g.State; var map = g.Map; var h = g.History;
         int myPower = me == null ? -1 : f.SeatOf(me.Name);
+        bool open = f.stage == GameFlow.STAGE_ORDERS || f.stage == GameFlow.STAGE_PAUSED || f.stage == GameFlow.STAGE_CLOSING || f.stage == GameFlow.STAGE_REVEAL;
         object my = null;
-        if (myPower >= 0 && (f.stage == GameFlow.STAGE_ORDERS || f.stage == GameFlow.STAGE_PAUSED))
+        if (myPower >= 0 && open)
         {
-            if (!wg.OptionCache.TryGetValue(myPower, out var cached) || cached.serial != f.phaseSerial || cached.submitted != f.submitted[myPower])
+            if (!wg.OptionCache.TryGetValue(myPower, out var cached) || cached.serial != f.phaseSerial)
             {
-                cached = (f.phaseSerial, f.submitted[myPower], new { orders = MyOrders(g, myPower), options = Options(g, myPower) });
+                cached = (f.phaseSerial, Options(g, myPower));
                 wg.OptionCache[myPower] = cached;
             }
-            my = new { power = myPower, locked = f.locked[myPower], needs = f.NeedsOrders(myPower), delta = s.phase == BoardState.PHASE_ADJUST ? g.Adj.AdjustDelta(s, myPower) : 0, data = cached.value };
+            my = new
+            {
+                power = myPower, submitted = f.submitted[myPower], sealedOrders = f.sealText[myPower] != "", opened = f.opened[myPower],
+                needs = f.NeedsOrders(myPower), delta = s.phase == BoardState.PHASE_ADJUST ? g.Adj.AdjustDelta(s, myPower) : 0, options = cached.value
+            };
+        }
+        object announce = null;
+        var an = g.Announce;
+        if (an.count > 0 && f.stage != GameFlow.STAGE_LOBBY)
+        {
+            int read = an.count; int at = Announcement.AT_DONE; int atPower = -1;
+            if (f.stage == GameFlow.STAGE_ANNOUNCE)
+            {
+                f.LocateAnnouncement(now);
+                at = an.at; atPower = an.atPower;
+                read = an.at == Announcement.AT_LEAD ? 0 : an.at == Announcement.AT_POWER ? FirstOf(an, atPower) : an.at == Announcement.AT_ORDER ? an.ReadIndex(an.atLine) + 1 : an.count;
+            }
+            announce = new
+            {
+                label = an.label, at, atPower, read,
+                status = Enumerable.Range(0, map.powerCount).Select(p => an.StatusText(an.powerStatus[p])),
+                lines = Enumerable.Range(0, an.count).Select(k => an.seq[k]).Select(i => new
+                {
+                    p = an.power[i], text = an.Text(i), res = an.OutcomeText(i), from = an.fromLoc[i], to = an.moveTo[i], moved = an.moved[i]
+                }),
+                battles = Enumerable.Range(0, an.battleCount).Select(k => new { prov = an.battleProv[k], movers = an.battleMovers[k], supports = an.battleSupports[k], winner = an.battleWinner[k] })
+            };
         }
         return new
         {
-            id = wg.Id, title = wg.Title, stage = f.stage, serial = f.phaseSerial,
+            id = wg.Id, title = wg.Title, stage = f.stage, serial = f.phaseSerial, sealKey = open ? f.SealKey() : "",
             label = f.stage == GameFlow.STAGE_LOBBY ? "Lobby" : s.PhaseLabel(), phase = s.phase, year = s.year, season = s.season,
-            secondsLeft = f.SecondsLeft(now), waitForAbsent = f.waitForAbsent,
-            timers = new[] { h.moveSeconds, h.retreatSeconds, h.adjustSeconds },
+            secondsLeft = f.SecondsLeft(now), waitForAbsent = f.waitForAbsent, closeReason = f.closeReason,
+            schedule = h.moveSchedule.Take(h.moveScheduleCount), timers = new[] { h.retreatSeconds, h.adjustSeconds },
+            announceSpeed = Lobby.AnnounceName(f), readyUp = f.readyMode != GameFlow.READY_NEVER,
             isHost = token != null && token == wg.HostToken,
+            host = wg.HostToken != null && wg.Players.TryGetValue(wg.HostToken, out var hp) ? hp.Name : "",
             me = me == null ? null : new { name = me.Name, power = myPower },
             seats = Enumerable.Range(0, map.powerCount).Select(p => new
             {
-                power = p, name = h.seatName[p], present = f.seatPresent[p], locked = f.locked[p], needs = f.NeedsOrders(p),
-                vote = f.drawVote[p], units = s.CountUnits(p), centres = s.CountCenters(p), gone = f.stage != GameFlow.STAGE_LOBBY && s.IsEliminated(p)
+                power = p, name = h.seatName[p], present = f.seatPresent[p], submitted = f.submitted[p], opened = f.opened[p], ready = f.ready[p],
+                needs = f.NeedsOrders(p), vote = f.drawVote[p], units = s.CountUnits(p), centres = s.CountCenters(p), gone = f.stage != GameFlow.STAGE_LOBBY && s.IsEliminated(p)
             }),
             units = Units(s), owners = s.owner.Take(map.provCount), dislodged = Dislodged(s),
             code = f.stage == GameFlow.STAGE_LOBBY ? "" : f.CurrentCode(),
             historyCount = h.count, winner = s.winner, drawn = s.drawn,
-            my
+            announce, my
         };
     }
 
-    private static object MyOrders(Game g, int power)
+    private static int FirstOf(Announcement an, int power)
     {
-        var s = g.State; var map = g.Map;
-        var pad = new Adjudicator(); pad.Init(map);
-        g.Codec.DecodeOrders(g.Flow.submitted[power], s, pad, power);
-        var list = new List<object>();
-        if (s.phase == BoardState.PHASE_MOVE)
-        {
-            for (int u = 0; u < s.unitCount; u++)
-            {
-                if (s.unitPower[u] != power) continue;
-                string k = pad.oType[u] switch { Adjudicator.MOVE => "m", Adjudicator.SUPPORT_HOLD => "s", Adjudicator.SUPPORT_MOVE => "t", Adjudicator.CONVOY => "c", _ => "h" };
-                list.Add(new { k, u = s.unitLoc[u], a = pad.oA[u], b = pad.oB[u], via = pad.oVia[u], text = g.Notation.MovementOrder(s.unitType[u], s.unitLoc[u], pad.oType[u], pad.oA[u], pad.oB[u], pad.oVia[u]) });
-            }
-        }
-        else if (s.phase == BoardState.PHASE_RETREAT)
-        {
-            for (int d = 0; d < s.disCount; d++)
-            {
-                if (s.disPower[d] != power) continue;
-                string unit = Notation.TypeLetter(s.disType[d]) + " " + map.locId[s.disLoc[d]];
-                list.Add(new { k = "r", u = s.disLoc[d], a = pad.retDest[d], b = -1, via = false, text = pad.retDest[d] >= 0 ? unit + " retreats to " + map.locId[pad.retDest[d]] : unit + " disbands" });
-            }
-        }
-        else if (s.phase == BoardState.PHASE_ADJUST)
-        {
-            for (int i = 0; i < pad.adjCount; i++)
-            {
-                int kind = pad.adjKind[i];
-                string k = kind == Adjudicator.ADJ_BUILD_ARMY ? "ba" : kind == Adjudicator.ADJ_BUILD_FLEET ? "bf" : kind == Adjudicator.ADJ_DISBAND ? "d" : "w";
-                list.Add(new { k, u = -1, a = pad.adjLoc[i], b = -1, via = false, text = AdjustText(map, kind, pad.adjLoc[i]) });
-            }
-        }
-        return list;
+        for (int g = 0; g < an.groupCount; g++) if (an.groupPower[g] == power) return an.groupFirst[g];
+        return 0;
     }
 
     private static string AdjustText(MapData map, int kind, int loc) => kind switch

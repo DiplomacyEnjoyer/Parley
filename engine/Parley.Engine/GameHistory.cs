@@ -12,6 +12,8 @@ namespace Parley.Engine
     ///
     /// It is saved as one line of text, the "game archive":
     ///     PA1;mapId.hash;timers;seats;entry;entry;...;check
+    /// (timers: the movement schedule as comma-separated seconds, then retreat and build
+    /// seconds, joined by '-', e.g. "1800,1800,900-120-180")
     /// where each entry is a position (see GameCodec.EncodeBody) optionally followed by
     /// '+' and that phase's orders. Any entry can be turned back into a board, which is
     /// what makes roll-back possible. The archive also remembers who sat where, so a
@@ -33,7 +35,13 @@ namespace Parley.Engine
         public string[] seatName;
 
         // timer settings travel with the game so a resumed game keeps its pace (seconds; 0 = no limit)
-        public int moveSeconds;
+        /// <summary>
+        /// Negotiation time per movement phase: entry 0 is the first movement phase of the
+        /// game, entry 1 the second, and so on; the last entry applies to all later ones.
+        /// For example 1800, 1800, 900 is "30 minutes twice, then 15 minutes".
+        /// </summary>
+        public int[] moveSchedule;
+        public int moveScheduleCount;
         public int retreatSeconds;
         public int adjustSeconds;
 
@@ -44,6 +52,7 @@ namespace Parley.Engine
             map = m; codec = c;
             body = new string[64]; orders = new string[64];
             seatName = new string[m.powerCount];
+            moveSchedule = new int[8];
             Reset();
         }
 
@@ -51,7 +60,27 @@ namespace Parley.Engine
         {
             count = 0;
             for (int i = 0; i < seatName.Length; i++) seatName[i] = "";
-            moveSeconds = 0; retreatSeconds = 0; adjustSeconds = 0;
+            moveSchedule[0] = 0; moveScheduleCount = 1; retreatSeconds = 0; adjustSeconds = 0;
+        }
+
+        /// <summary>Sets the movement-phase schedule from the first n entries of seconds (see moveSchedule).</summary>
+        public void SetMoveSchedule(int[] seconds, int n)
+        {
+            if (seconds == null || n < 1) { moveSchedule[0] = 0; moveScheduleCount = 1; return; }
+            if (n > 40) n = 40;
+            if (moveSchedule.Length < n) moveSchedule = new int[n];
+            for (int i = 0; i < n; i++) moveSchedule[i] = seconds[i] < 0 ? 0 : seconds[i];
+            // trailing repeats add nothing: "900, 900" is the same schedule as "900"
+            while (n > 1 && moveSchedule[n - 1] == moveSchedule[n - 2]) n--;
+            moveScheduleCount = n;
+        }
+
+        /// <summary>Seconds of negotiation for the movement phase with this number (0 = the game's first).</summary>
+        public int MoveSecondsFor(int movePhaseIndex)
+        {
+            if (movePhaseIndex < 0) movePhaseIndex = 0;
+            if (movePhaseIndex >= moveScheduleCount) movePhaseIndex = moveScheduleCount - 1;
+            return moveSchedule[movePhaseIndex];
         }
 
         private void Grow()
@@ -101,8 +130,9 @@ namespace Parley.Engine
 
         public string ToArchive()
         {
-            string r = MAGIC + ";" + map.mapId + "." + map.hash + ";"
-                + moveSeconds.ToString() + "-" + retreatSeconds.ToString() + "-" + adjustSeconds.ToString() + ";";
+            string r = MAGIC + ";" + map.mapId + "." + map.hash + ";";
+            for (int i = 0; i < moveScheduleCount; i++) r += (i > 0 ? "," : "") + moveSchedule[i].ToString();
+            r += "-" + retreatSeconds.ToString() + "-" + adjustSeconds.ToString() + ";";
             for (int i = 0; i < seatName.Length; i++)
             {
                 if (i > 0) r += ",";
@@ -150,8 +180,15 @@ namespace Parley.Engine
 
             string[] timers = p[2].Split('-');
             if (timers.Length != 3) { error = "bad timer settings"; return false; }
-            int ms = map.ParseInt(timers[0], -1); int rs = map.ParseInt(timers[1], -1); int az = map.ParseInt(timers[2], -1);
-            if (ms < 0 || rs < 0 || az < 0) { error = "bad timer settings"; return false; }
+            string[] sched = timers[0].Split(',');
+            int[] ms = new int[sched.Length];
+            for (int i = 0; i < sched.Length; i++)
+            {
+                ms[i] = map.ParseInt(sched[i], -1);
+                if (ms[i] < 0) { error = "bad timer settings"; return false; }
+            }
+            int rs = map.ParseInt(timers[1], -1); int az = map.ParseInt(timers[2], -1);
+            if (rs < 0 || az < 0) { error = "bad timer settings"; return false; }
 
             string[] seats = p[3].Split(',');
             if (seats.Length != map.powerCount) { error = "bad seat list"; return false; }
@@ -167,7 +204,7 @@ namespace Parley.Engine
                 if (!codec.DecodeBody(nb[i], scratch)) { error = "entry " + (i + 1).ToString() + ": " + codec.error; return false; }
             }
             body = nb; orders = no; count = n;
-            moveSeconds = ms; retreatSeconds = rs; adjustSeconds = az;
+            SetMoveSchedule(ms, ms.Length); retreatSeconds = rs; adjustSeconds = az;
             for (int i = 0; i < seatName.Length; i++) seatName[i] = UnescapeName(seats[i]);
             return true;
         }

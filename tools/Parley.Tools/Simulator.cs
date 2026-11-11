@@ -65,7 +65,7 @@ public sealed class Simulator
                         if (!flow.NeedsOrders(p)) continue;
                         string orders = bot.Choose(p);
                         if (!flow.Submit(p, orders)) throw new InvariantException("orders rejected: " + flow.error + " [" + orders + "]");
-                        flow.SetLocked(p, true);
+                        flow.SetSubmitted(p, true);
                     }
                     bool wasMove = g.State.phase == BoardState.PHASE_MOVE;
                     now += 1;

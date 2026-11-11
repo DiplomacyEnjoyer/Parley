@@ -71,7 +71,7 @@ public static class CrossCheck
                     written++;
                 }
                 // the game itself moves on with sensible play
-                for (int p = 0; p < map.powerCount; p++) if (f.NeedsOrders(p)) { f.Submit(p, basic.Choose(p)); f.SetLocked(p, true); }
+                for (int p = 0; p < map.powerCount; p++) if (f.NeedsOrders(p)) { f.Submit(p, basic.Choose(p)); f.SetSubmitted(p, true); }
                 if (!f.Tick(step + 1)) break;
             }
         }

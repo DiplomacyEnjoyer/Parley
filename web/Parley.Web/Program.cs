@@ -42,7 +42,7 @@ app.MapPost("/api/games", (CreateRequest req) =>
 {
     if (req.MapId == null || !lobby.Maps.TryGetValue(req.MapId, out var m)) return Fail("unknown map");
     var wg = lobby.Create(m, string.IsNullOrWhiteSpace(req.Title) ? m.Map.mapName : req.Title.Trim());
-    wg.G.Flow.SetTimers(req.MoveSeconds, req.RetreatSeconds, req.AdjustSeconds);
+    Lobby.ApplySettings(wg.G.Flow, req.MoveSchedule, req.RetreatSeconds, req.AdjustSeconds, req.Announce, req.ReadyUp);
     wg.G.Flow.waitForAbsent = req.WaitForEveryone;
     lobby.Save(wg);
     return Results.Json(new { id = wg.Id });
@@ -62,7 +62,6 @@ app.MapPost("/api/games/import", (ImportRequest req) =>
     var wg = lobby.Create(m, m.Map.mapName + " (resumed)");
     bool ok = isArchive ? wg.G.Flow.LoadArchive(text, lobby.Now) : wg.G.Flow.LoadCode(text, lobby.Now);
     if (!ok) { string err = wg.G.Flow.error; lobby.Remove(wg); return Fail(err); }
-    wg.G.Flow.waitForAbsent = true;
     lobby.Save(wg);
     return Results.Json(new { id = wg.Id });
 });
@@ -89,7 +88,7 @@ app.MapPost("/api/games/{id}/join", (string id, JoinRequest req) =>
         // a seat is tied to a name; reusing the name of somebody who is in the game needs their link
         if (wg.Players.Values.Any(p => p.Name == name)) return Fail("that name is already in this game. If it is you, use the personal link you were given (or ask the host to free the seat).");
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
-        wg.Players[token] = new Player { Name = name, LastSeen = lobby.Now };
+        wg.Players[token] = new Player { Name = name, LastSeen = lobby.Now, JoinOrder = wg.Players.Count };
         if (wg.HostToken == null) wg.HostToken = token;
         lobby.Save(wg);
         return Results.Json(new { token });
@@ -122,56 +121,67 @@ app.MapPost("/api/games/{id}/seat", (string id, SeatRequest req) =>
     }
 });
 
-app.MapPost("/api/games/{id}/orders", (string id, OrdersRequest req) =>
+// Sealed orders: the browser keeps its order sheet to itself and sends only a seal
+// (a SHA-256 fingerprint mixed with a secret salt). Flipping submit on = sending a seal.
+app.MapPost("/api/games/{id}/seal", (string id, SealRequest req) =>
 {
     if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
     lock (wg)
     {
         if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
-        var g = wg.G; var f = g.Flow;
+        var f = wg.G.Flow;
         int power = f.SeatOf(me.Name);
         if (power < 0) return Fail("you do not play a power in this game");
-        if (req.Serial != f.phaseSerial) return Fail("the phase has changed; your screen was out of date");
-        if (f.locked[power] && req.Orders != null) f.SetLocked(power, false);
-        if (req.Orders != null)
-        {
-            var pad = new Adjudicator(); pad.Init(g.Map);
-            var s = g.State; var map = g.Map;
-            foreach (var o in req.Orders)
-            {
-                if (s.phase == BoardState.PHASE_MOVE)
-                {
-                    if (o.U < 0 || o.U >= map.locCount) continue;
-                    int u = s.provUnit[map.locProv[o.U]];
-                    if (u < 0 || s.unitPower[u] != power) continue;
-                    switch (o.K)
-                    {
-                        case "m": pad.SetMove(u, o.A, o.Via); break;
-                        case "s": pad.SetSupportHold(u, o.A); break;
-                        case "t": pad.SetSupportMove(u, o.A, o.B); break;
-                        case "c": pad.SetConvoy(u, o.A, o.B); break;
-                    }
-                }
-                else if (s.phase == BoardState.PHASE_RETREAT)
-                {
-                    for (int d = 0; d < s.disCount; d++)
-                        if (s.disLoc[d] == o.U && s.disPower[d] == power && o.K == "r") pad.SetRetreat(d, o.A);
-                }
-                else if (s.phase == BoardState.PHASE_ADJUST)
-                {
-                    switch (o.K)
-                    {
-                        case "ba": pad.AddAdjust(power, Adjudicator.ADJ_BUILD_ARMY, o.A); break;
-                        case "bf": pad.AddAdjust(power, Adjudicator.ADJ_BUILD_FLEET, o.A); break;
-                        case "d": pad.AddAdjust(power, Adjudicator.ADJ_DISBAND, o.A); break;
-                    }
-                }
-            }
-            if (!f.Submit(power, g.Codec.EncodeOrders(s, pad, power))) return Fail(f.error);
-        }
-        if (req.Lock.HasValue) f.SetLocked(power, req.Lock.Value);
-        lobby.Tick(wg);
+        if (req.SealKey != f.SealKey()) return Fail("the phase has changed; your screen was out of date");
+        if (!f.SetSeal(power, req.Seal ?? "")) return Fail(f.error);
+        lobby.Tick(wg); lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+// Submit toggle off: withdraws the seal so the sheet can be edited again.
+app.MapPost("/api/games/{id}/unsubmit", (string id, TokenRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
+        var f = wg.G.Flow;
+        int power = f.SeatOf(me.Name);
+        if (power < 0) return Fail("you do not play a power in this game");
+        if (!f.SetSubmitted(power, false)) return Fail(f.error);
         lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+// Once every seal is frozen, each browser opens its own sheet; the server checks it against the seal.
+app.MapPost("/api/games/{id}/open", (string id, OpenRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
+        var f = wg.G.Flow;
+        int power = f.SeatOf(me.Name);
+        if (power < 0) return Fail("you do not play a power in this game");
+        if (!f.Open(power, req.Salt ?? "", req.Orders ?? "")) return Fail(f.error);
+        lobby.Tick(wg); lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+app.MapPost("/api/games/{id}/ready", (string id, DrawRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
+        var f = wg.G.Flow;
+        int power = f.SeatOf(me.Name);
+        if (power < 0) return Fail("you do not play a power in this game");
+        if (!f.SetReady(power, req.Value)) return Fail(f.error);
+        lobby.Tick(wg); lobby.Save(wg);
         return Results.Json(new { ok = true });
     }
 });
@@ -202,9 +212,9 @@ app.MapPost("/api/games/{id}/host", (string id, HostRequest req) =>
             case "start": if (!f.StartGame(now)) return Fail(f.error); break;
             case "pause": f.Pause(now); break;
             case "resume": f.Resume(now); break;
-            case "resolve": f.ResolveNow(now); break;
+            case "next": f.ForceNext(now); break;
             case "rollback": if (!f.RollBack(req.Index, now)) return Fail(f.error); break;
-            case "timers": f.SetTimers(req.MoveSeconds, req.RetreatSeconds, req.AdjustSeconds); break;
+            case "timers": Lobby.ApplySettings(f, req.MoveSchedule, req.RetreatSeconds, req.AdjustSeconds, req.Announce, req.ReadyUp); break;
             case "wait": f.waitForAbsent = req.Value; break;
             case "free":
                 if (req.Index >= 0 && req.Index < wg.G.Map.powerCount)
@@ -248,11 +258,12 @@ string url = Environment.GetEnvironmentVariable("PARLEY_URL") ?? "http://0.0.0.0
 Console.WriteLine($"Parley web client: {lobby.Maps.Count} maps, {lobby.Games.Count} saved games. Listening on {url}");
 app.Run(url);
 
-public record CreateRequest(string MapId, string Title, int MoveSeconds, int RetreatSeconds, int AdjustSeconds, bool WaitForEveryone);
+public record CreateRequest(string MapId, string Title, int[] MoveSchedule, int RetreatSeconds, int AdjustSeconds, bool WaitForEveryone, string Announce, bool ReadyUp);
 public record ImportRequest(string Text);
 public record JoinRequest(string Name);
 public record SeatRequest(string Token, int Power);
-public record OrderItem(string K, int U, int A, int B, bool Via);
-public record OrdersRequest(string Token, int Serial, List<OrderItem> Orders, bool? Lock);
+public record SealRequest(string Token, string SealKey, string Seal);
+public record OpenRequest(string Token, string Salt, string Orders);
+public record TokenRequest(string Token);
 public record DrawRequest(string Token, bool Value);
-public record HostRequest(string Token, string Action, int Index, int MoveSeconds, int RetreatSeconds, int AdjustSeconds, bool Value);
+public record HostRequest(string Token, string Action, int Index, int[] MoveSchedule, int RetreatSeconds, int AdjustSeconds, bool Value, string Announce, bool ReadyUp);

@@ -109,7 +109,7 @@ public class CodecTests
         var bot = new Bot(g, new Random(5), true);
         for (int i = 0; i < 9; i++)
         {
-            for (int p = 0; p < 3; p++) if (flow.NeedsOrders(p)) { flow.Submit(p, bot.Choose(p)); flow.SetLocked(p, true); }
+            for (int p = 0; p < 3; p++) if (flow.NeedsOrders(p)) { flow.Submit(p, bot.Choose(p)); flow.SetSubmitted(p, true); }
             Assert.True(flow.Tick(i + 1));
         }
         string archive = flow.Archive();
@@ -121,7 +121,7 @@ public class CodecTests
         Assert.Equal(archive, g2.Flow.Archive());
         Assert.Equal("Björn the Bold; 3rd+", g2.History.seatName[1]);
         Assert.Equal("名前", g2.History.seatName[2]);
-        Assert.Equal(600, g2.History.moveSeconds);
+        Assert.Equal(600, g2.History.MoveSecondsFor(0));
         Assert.Equal(g.Codec.EncodeState(g.State), g2.Codec.EncodeState(g2.State));
         // every past phase can be pulled out as a stand-alone code
         for (int i = 0; i < g2.History.count; i++)
@@ -144,7 +144,7 @@ public class CodecTests
         var bot = new Bot(g, new Random(9), true);
         for (int i = 0; i < 60 && flow.stage == GameFlow.STAGE_ORDERS; i++)
         {
-            for (int p = 0; p < 3; p++) if (flow.NeedsOrders(p)) { flow.Submit(p, bot.Choose(p)); flow.SetLocked(p, true); }
+            for (int p = 0; p < 3; p++) if (flow.NeedsOrders(p)) { flow.Submit(p, bot.Choose(p)); flow.SetSubmitted(p, true); }
             flow.Tick(i + 1);
         }
         string archive = flow.Archive();

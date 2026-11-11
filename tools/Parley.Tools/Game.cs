@@ -16,6 +16,8 @@ public sealed class Game
     public GameCodec Codec;
     public GameHistory History;
     public GameFlow Flow;
+    public OrderSeal Seal;
+    public Announcement Announce;
     public BoardState Scratch;
 
     public static Game FromPmap(string pmapText, Dictionary<string, List<string>> aliases = null)
@@ -38,7 +40,9 @@ public sealed class Game
         g.Codec = new GameCodec(); g.Codec.Init(map);
         g.History = new GameHistory(); g.History.Init(map, g.Codec);
         g.Scratch = new BoardState(); g.Scratch.Init(map);
-        g.Flow = new GameFlow(); g.Flow.Init(map, g.State, g.Adj, g.Codec, g.History, g.Scratch);
+        g.Seal = new OrderSeal(); g.Seal.Init();
+        g.Announce = new Announcement(); g.Announce.Init(map);
+        g.Flow = new GameFlow(); g.Flow.Init(map, g.State, g.Adj, g.Codec, g.History, g.Scratch, g.Seal, g.Announce);
         return g;
     }
 

@@ -228,7 +228,7 @@ public class OptionTests
                     if (g.Adj.AdjustDelta(s, p) > 0) Assert.True(n > 0);
                 }
             }
-            for (int p = 0; p < map.powerCount; p++) if (f.NeedsOrders(p)) { f.Submit(p, bot.Choose(p)); f.SetLocked(p, true); }
+            for (int p = 0; p < map.powerCount; p++) if (f.NeedsOrders(p)) { f.Submit(p, bot.Choose(p)); f.SetSubmitted(p, true); }
             Assert.True(f.Tick(step + 1));
         }
         Assert.True(checkedPositions >= 3 && checkedOrders > 500, $"only {checkedPositions} positions / {checkedOrders} orders checked");

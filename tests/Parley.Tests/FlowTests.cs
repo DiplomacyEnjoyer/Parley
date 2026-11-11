@@ -52,19 +52,19 @@ public class FlowTests
     }
 
     [Fact]
-    public void PhaseResolvesWhenEveryoneWhoIsHereHasLockedIn()
+    public void PhaseEndsEarlyWhenEveryoneWhoIsHereHasSubmitted()
     {
         var g = Ring(3); var f = g.Flow;
         f.ClaimSeat(0, "Ada"); f.ClaimSeat(1, "Bo"); f.ClaimSeat(2, "Cy");
         f.StartGame(0);
         Assert.True(f.Submit(0, Orders(g, 0, "F alp - als", "A alc - all")));
-        f.SetLocked(0, true);
+        f.SetSubmitted(0, true);
         Assert.False(f.Tick(1));                       // Bo and Cy still thinking
         Assert.False(f.Submit(0, ""));                 // locked means locked
-        Assert.Contains("locked", f.error);
-        f.SetLocked(0, false);
+        Assert.Contains("switch submit off", f.error);
+        f.SetSubmitted(0, false);
         Assert.True(f.Submit(0, Orders(g, 0, "F alp - als", "A alc - alr")));  // changed my mind
-        f.SetLocked(0, true); f.SetLocked(1, true);
+        f.SetSubmitted(0, true); f.SetSubmitted(1, true);
         Assert.False(f.Tick(2));
         f.PlayerLeft("Cy");                            // Cy drops: no longer waited for
         Assert.True(f.Tick(3));
@@ -72,7 +72,7 @@ public class FlowTests
         Assert.True(HasUnit(g, "alder", "als"));
         Assert.True(HasUnit(g, "alder", "alr"));
         Assert.True(HasUnit(g, "corvin", "coc"));      // absent player's units held
-        Assert.False(f.locked[0]);                     // new phase, nobody is locked
+        Assert.False(f.submitted[0]);                     // new phase, nobody is locked
         Assert.Equal(2, g.History.count);
         Assert.NotEqual("", g.History.orders[0]);
     }
@@ -136,7 +136,7 @@ public class FlowTests
         f.SetTimers(300, 60, 90);
         f.ClaimSeat(0, "Ada"); f.ClaimSeat(1, "Bo"); f.ClaimSeat(2, "Cy");
         f.StartGame(0);
-        f.Submit(0, Orders(g, 0, "F alp - als")); f.SetLocked(0, true); f.SetLocked(1, true); f.SetLocked(2, true);
+        f.Submit(0, Orders(g, 0, "F alp - als")); f.SetSubmitted(0, true); f.SetSubmitted(1, true); f.SetSubmitted(2, true);
         Assert.True(f.Tick(1));
         string archive = f.Archive();
 
@@ -150,7 +150,7 @@ public class FlowTests
         Assert.Equal(2, f2.PlayerJoined("Cy"));
         Assert.Equal(300, f2.SecondsLeft(777));         // full clock for the interrupted phase
         f2.Resume(800);
-        f2.SetLocked(0, true); f2.SetLocked(2, true);
+        f2.SetSubmitted(0, true); f2.SetSubmitted(2, true);
         Assert.True(f2.Tick(801));                      // Bo has not come back and is not waited for
         Assert.Equal(3, g2.History.count);
     }
@@ -165,7 +165,7 @@ public class FlowTests
         var codes = new List<string> { f.CurrentCode() };
         for (int i = 0; i < 8; i++)
         {
-            for (int p = 0; p < 3; p++) if (f.NeedsOrders(p)) { f.Submit(p, bot.Choose(p)); f.SetLocked(p, true); }
+            for (int p = 0; p < 3; p++) if (f.NeedsOrders(p)) { f.Submit(p, bot.Choose(p)); f.SetSubmitted(p, true); }
             Assert.True(f.Tick(i + 1));
             codes.Add(f.CurrentCode());
         }
@@ -222,14 +222,14 @@ public class FlowTests
         f.PlayerJoined("Ada"); f.PlayerJoined("Bo"); f.Resume(0);
 
         f.Submit(0, Orders(g, 0, "A brk - brl", "A brc S brk - brl"));
-        f.SetLocked(0, true); f.SetLocked(1, true);
+        f.SetSubmitted(0, true); f.SetSubmitted(1, true);
         Assert.True(f.Tick(1));
         Assert.Equal("F5R", g.State.PhaseLabel());
         Assert.False(f.NeedsOrders(0));                 // only Brann has a unit to retreat
         Assert.True(f.NeedsOrders(1));
         Assert.False(f.Tick(2));
         f.Submit(1, Orders(g, 1, "A brl - brp"));
-        f.SetLocked(1, true);
+        f.SetSubmitted(1, true);
         Assert.True(f.Tick(3));
         Assert.True(HasUnit(g, "brann", "brp"));
         // Alder now stands on Brann Marsh and Brann Hold (both centres) and owns Alder Haven:
@@ -238,7 +238,7 @@ public class FlowTests
         Assert.True(f.NeedsOrders(0));
         Assert.False(f.NeedsOrders(1));
         f.Submit(0, Orders(g, 0, "Build F alp"));
-        f.SetLocked(0, true);
+        f.SetSubmitted(0, true);
         Assert.True(f.Tick(4));                         // Brann is not waited for
         Assert.True(HasUnit(g, "alder", "alp"));
         Assert.Equal("S6M", g.State.PhaseLabel());

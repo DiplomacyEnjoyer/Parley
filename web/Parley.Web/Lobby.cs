@@ -14,6 +14,7 @@ public sealed class Player
 {
     public string Name = "";
     public float LastSeen;
+    public int JoinOrder;
 }
 
 public sealed class MapInfo
@@ -31,7 +32,7 @@ public sealed class WebGame
     public MapInfo Info;
     public string HostToken;
     public Dictionary<string, Player> Players = new();
-    public Dictionary<int, (int serial, string submitted, object value)> OptionCache = new();
+    public Dictionary<int, (int serial, object value)> OptionCache = new();
 }
 
 /// <summary>All maps and games on this server, the shared clock, and saving games to disk.</summary>
@@ -41,7 +42,8 @@ public sealed class Lobby
     public readonly ConcurrentDictionary<string, WebGame> Games = new();
     private readonly string dataDir;
     private readonly Stopwatch clock = Stopwatch.StartNew();
-    private const float AwayAfterSeconds = 45;
+    /// <summary>A player whose browser has not checked in for this long counts as away (PARLEY_AWAY_SECONDS).</summary>
+    public static readonly float AwayAfterSeconds = float.TryParse(Environment.GetEnvironmentVariable("PARLEY_AWAY_SECONDS"), out var a) && a > 0 ? a : 45;
 
     public float Now => (float)clock.Elapsed.TotalSeconds;
 
@@ -71,10 +73,40 @@ public sealed class Lobby
         string id;
         do { id = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant(); } while (Games.ContainsKey(id));
         var wg = new WebGame { Id = id, Title = title, Info = m, G = Game.FromPmap(m.Pmap) };
-        wg.G.Flow.waitForAbsent = true;
+        WebDefaults(wg.G.Flow);
         Games[id] = wg;
         return wg;
     }
+
+    /// <summary>
+    /// The web client always plays with sealed orders: the server never holds anybody's
+    /// orders before every seal is frozen. Browsers poll every couple of seconds, so the
+    /// closing and opening windows are a little longer than in VR.
+    /// </summary>
+    public static void WebDefaults(GameFlow f)
+    {
+        f.UseLiveSettings();
+        f.closeGraceSeconds = 10; f.revealSeconds = 20;
+        f.waitForAbsent = false;
+    }
+
+    /// <summary>Timer schedule (seconds), announcement speed ("normal", "fast", "off") and ready-up.</summary>
+    public static void ApplySettings(GameFlow f, int[] schedule, int retreat, int adjust, string announce, bool readyUp)
+    {
+        if (schedule != null && schedule.Length > 0) f.SetMoveSchedule(schedule, schedule.Length);
+        f.history.retreatSeconds = Math.Max(0, retreat);
+        f.history.adjustSeconds = Math.Max(0, adjust);
+        f.readyMode = readyUp ? GameFlow.READY_MOVEMENT : GameFlow.READY_NEVER;
+        switch (announce)
+        {
+            case "off": f.announceLeadSeconds = 0; f.announcePowerSeconds = 0; f.announceOrderSeconds = 0; f.announceResultSeconds = 0; break;
+            case "fast": f.announceLeadSeconds = 1; f.announcePowerSeconds = 0.5f; f.announceOrderSeconds = 0.5f; f.announceResultSeconds = 2; break;
+            default: f.announceLeadSeconds = 3; f.announcePowerSeconds = 1.5f; f.announceOrderSeconds = 3; f.announceResultSeconds = 6; break;
+        }
+    }
+
+    public static string AnnounceName(GameFlow f) =>
+        f.announceOrderSeconds <= 0 ? "off" : f.announceOrderSeconds < 1 ? "fast" : "normal";
 
     public void Remove(WebGame wg)
     {
@@ -94,7 +126,16 @@ public sealed class Lobby
             if (name == "") { f.seatPresent[p] = false; continue; }
             f.seatPresent[p] = wg.Players.Values.Any(pl => pl.Name == name && now - pl.LastSeen < AwayAfterSeconds);
         }
-        if (f.Tick(now)) Save(wg);
+        // the host role moves on if the host's browser has gone away, so a dropped host never stalls the game
+        if (wg.HostToken == null || !wg.Players.TryGetValue(wg.HostToken, out var host) || now - host.LastSeen >= AwayAfterSeconds)
+        {
+            var next = wg.Players.Where(p => now - p.Value.LastSeen < AwayAfterSeconds)
+                .OrderBy(p => f.SeatOf(p.Value.Name) < 0 ? 1 : 0).ThenBy(p => p.Value.JoinOrder).FirstOrDefault();
+            if (next.Key != null && next.Key != wg.HostToken) { wg.HostToken = next.Key; Save(wg); }
+        }
+        bool changed = false;
+        while (f.Tick(now)) changed = true;
+        if (changed) Save(wg);
     }
 
     private sealed class Saved
@@ -106,12 +147,16 @@ public sealed class Lobby
         public string Host { get; set; }
         public Dictionary<string, string> Players { get; set; }
         public bool WaitForAbsent { get; set; }
+        public int[] Schedule { get; set; }
         public int[] Timers { get; set; }
+        public string Announce { get; set; }
+        public bool ReadyUp { get; set; }
+        public string[] Seals { get; set; }
+        public string[] JoinOrder { get; set; }
         public string[] Seats { get; set; }
         public string Archive { get; set; }
         public bool Running { get; set; }
-        public string[] Submitted { get; set; }
-        public bool[] Locked { get; set; }
+
     }
 
     public void Save(WebGame wg)
@@ -122,11 +167,13 @@ public sealed class Lobby
             Id = wg.Id, Title = wg.Title, MapId = wg.G.Map.mapId, Created = wg.Created, Host = wg.HostToken,
             Players = wg.Players.ToDictionary(p => p.Key, p => p.Value.Name),
             WaitForAbsent = f.waitForAbsent,
-            Timers = new[] { h.moveSeconds, h.retreatSeconds, h.adjustSeconds },
+            Schedule = h.moveSchedule.Take(h.moveScheduleCount).ToArray(),
+            Timers = new[] { 0, h.retreatSeconds, h.adjustSeconds },
+            Announce = AnnounceName(f), ReadyUp = f.readyMode != GameFlow.READY_NEVER,
             Seats = h.seatName.ToArray(),
             Archive = h.count > 0 ? f.Archive() : "",
-            Running = f.stage == GameFlow.STAGE_ORDERS,
-            Submitted = f.submitted.ToArray(), Locked = f.locked.ToArray(),
+            Running = f.stage != GameFlow.STAGE_PAUSED && f.stage != GameFlow.STAGE_LOBBY && f.stage != GameFlow.STAGE_FINISHED,
+            Seals = f.sealText.ToArray(),
         };
         string path = Path.Combine(dataDir, wg.Id + ".json");
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(s));
@@ -138,23 +185,22 @@ public sealed class Lobby
         var s = JsonSerializer.Deserialize<Saved>(File.ReadAllText(file));
         if (s == null || !Maps.TryGetValue(s.MapId, out var m)) { Console.WriteLine($"saved game {file}: map '{s?.MapId}' is not installed"); return; }
         var wg = new WebGame { Id = s.Id, Title = s.Title, Created = s.Created, Info = m, G = Game.FromPmap(m.Pmap), HostToken = s.Host };
-        foreach (var (token, name) in s.Players) wg.Players[token] = new Player { Name = name, LastSeen = -1000 };
+        int order = 0;
+        foreach (var (token, name) in s.Players) wg.Players[token] = new Player { Name = name, LastSeen = -1000, JoinOrder = order++ };
         var f = wg.G.Flow; var h = wg.G.History;
+        WebDefaults(f);
+        ApplySettings(f, s.Schedule, s.Timers?[1] ?? 0, s.Timers?[2] ?? 0, s.Announce, s.ReadyUp);
         if (!string.IsNullOrEmpty(s.Archive))
         {
             if (!f.LoadArchive(s.Archive, Now)) { Console.WriteLine($"saved game {file}: {f.error}"); return; }
-            // orders that were handed in before the server stopped are still there
-            for (int p = 0; p < wg.G.Map.powerCount && s.Submitted != null && p < s.Submitted.Length; p++)
-            {
-                f.Submit(p, s.Submitted[p]);
-                if (s.Locked != null && p < s.Locked.Length) f.SetLocked(p, s.Locked[p]);
-            }
+            // seals that were published before the server stopped still count; the browsers kept the sheets
+            for (int p = 0; p < wg.G.Map.powerCount && s.Seals != null && p < s.Seals.Length; p++)
+                if (!string.IsNullOrEmpty(s.Seals[p])) f.SetSeal(p, s.Seals[p]);
             if (s.Running) f.Resume(Now);
         }
         else
         {
             for (int p = 0; p < h.seatName.Length && p < s.Seats.Length; p++) h.seatName[p] = s.Seats[p];
-            f.SetTimers(s.Timers[0], s.Timers[1], s.Timers[2]);
         }
         f.waitForAbsent = s.WaitForAbsent;
         Games[wg.Id] = wg;
