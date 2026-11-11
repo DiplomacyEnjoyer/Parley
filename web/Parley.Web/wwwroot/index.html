@@ -52,6 +52,15 @@
   .hist button { padding:2px 7px; font-size:12px; margin:2px 2px 0 0; }
   .hist button.cur { background:var(--ink); color:#fff; border-color:var(--ink); }
   code.gc { display:block; word-break:break-all; font-size:12px; background:#f1eee6; padding:6px; border-radius:6px; }
+  .toggle { display:flex; align-items:center; gap:10px; padding:10px 12px; border:2px solid var(--line); border-radius:10px; cursor:pointer; font-size:17px; font-weight:600; background:#fff; width:100%; justify-content:space-between; }
+  .toggle .knob { width:52px; height:28px; border-radius:14px; background:#ccc; position:relative; transition:background .15s; flex:none; }
+  .toggle .knob::after { content:""; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; transition:left .15s; }
+  .toggle.on { border-color:var(--good); } .toggle.on .knob { background:var(--good); } .toggle.on .knob::after { left:27px; }
+  .ann { background:#1f2430; color:#f4f1ea; border-radius:8px; padding:12px 14px; margin-bottom:8px; }
+  .ann h3 { margin:0 0 6px; font-size:15px; letter-spacing:.04em; }
+  .ann .cur { font-size:18px; font-weight:700; }
+  .ann .done { opacity:.75; }
+  .ann .res { color:#ffb4a6; }
   table { border-collapse:collapse; width:100%; } td, th { text-align:left; padding:4px 6px; border-top:1px solid var(--line); }
 </style>
 </head>
@@ -75,33 +84,164 @@ let token = gameId ? localStorage.getItem("parley-token-" + gameId) : null;
 let M = null;          // map
 let S = null;          // latest state from the server
 let view = null;       // a past phase being looked at, or null for "now"
-let last = null;       // results of the most recent resolved phase
+let last = null;       // the phase resolved most recently (position before it, every order and result)
 let ui = { step: null }; // tap sequence in progress
-let myOrders = [];     // my orders for this phase, as sent to the server
-let lastSerial = -1, clockBase = 0, clockAt = 0, flash = "";
+let myOrders = [];     // my private order sheet: never sent to the server until every seal is in
+let lastSerial = -1, lastStage = -1, clockBase = 0, clockAt = 0, flash = "", busy = false;
+
+// stages (GameFlow.STAGE_*)
+const LOBBY = 0, ORDERS = 1, PAUSED = 2, FINISHED = 3, CLOSING = 4, REVEAL = 5, ANNOUNCE = 6, READY = 7;
+const STAGE_TEXT = ["waiting to start", "", "paused", "finished", "time is up: sealing sheets", "opening the sealed orders", "announcing the orders", "waiting for everyone to be ready"];
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
   let data = null; try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok) throw new Error(data && data.error ? data.error : "Request failed (" + r.status + ")");
+  if (!r.ok) { const e = new Error(data && data.error ? data.error : "Request failed (" + r.status + ")"); e.status = r.status; throw e; }
   return data;
 }
 const fmtTime = s => s < 0 ? "no time limit" : Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 const seasonName = l => l === "Lobby" ? "Lobby" : ({ S: "Spring", F: "Fall", W: "Winter" }[l[0]] + " of year " + l.slice(1, -1) + ", " + ({ M: "orders", R: "retreats", A: "builds", X: "game over" }[l.slice(-1)]));
+const minutes = v => String(v).split(",").map(x => Math.round(60 * +x.trim())).filter(x => !isNaN(x));
+
+// ------------------------------------------------------------------ SHA-256 (plain JavaScript, so it also works on http:// LAN addresses)
+function sha256Hex(str) {
+  const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  const bytes = Array.from(new TextEncoder().encode(str)), bits = bytes.length * 8;
+  bytes.push(0x80); while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let i = 7; i >= 0; i--) bytes.push(i >= 4 ? 0 : (bits >>> (i * 8)) & 255);
+  const H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19], W = new Array(64);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let off = 0; off < bytes.length; off += 64) {
+    for (let t = 0; t < 16; t++) W[t] = (bytes[off + 4 * t] << 24) | (bytes[off + 4 * t + 1] << 16) | (bytes[off + 4 * t + 2] << 8) | bytes[off + 4 * t + 3];
+    for (let t = 16; t < 64; t++) {
+      const s0 = rotr(W[t - 15], 7) ^ rotr(W[t - 15], 18) ^ (W[t - 15] >>> 3), s1 = rotr(W[t - 2], 17) ^ rotr(W[t - 2], 19) ^ (W[t - 2] >>> 10);
+      W[t] = (W[t - 16] + s0 + W[t - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let t = 0; t < 64; t++) {
+      const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[t] + W[t]) | 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+    H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+  }
+  return H.map(x => (x >>> 0).toString(16).padStart(8, "0")).join("");
+}
+const randomSalt = () => Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, "0")).join("");
+
+// ------------------------------------------------------------------ order text in the engine's compact format (GameCodec)
+const DIG = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const enc2 = v => DIG[Math.floor(v / 62)] + DIG[v % 62];
+const encPower = p => M.powers.length < 61 ? DIG[p + 1] : enc2(p + 1);
+function encodeSheet(orders, power) {
+  return orders.map(o => {
+    switch (o.k) {
+      case "m": return enc2(o.u) + (o.via ? "v" : "m") + enc2(o.a);
+      case "s": return enc2(o.u) + "s" + enc2(o.a);
+      case "t": return enc2(o.u) + "t" + enc2(o.a) + enc2(o.b);
+      case "c": return enc2(o.u) + "c" + enc2(o.a) + enc2(o.b);
+      case "r": return o.a >= 0 ? enc2(o.u) + enc2(o.a) : "";
+      case "ba": return "a" + enc2(o.a) + encPower(power);
+      case "bf": return "f" + enc2(o.a) + encPower(power);
+      case "d": return "d" + enc2(o.a) + encPower(power);
+    }
+    return "";
+  }).join("");
+}
+function orderText(o) {
+  const L = M.locs, P = M.provs;
+  const unitAt = loc => { const u = S.units.find(x => x.l === loc) || S.dislodged.find(x => x.l === loc); return u ? (u.t === 1 ? "F" : "A") : "?"; };
+  const who = unitAt(o.u) + " " + (o.u >= 0 ? L[o.u].id : "?");
+  switch (o.k) {
+    case "m": return who + " - " + L[o.a].id + (o.via ? " via convoy" : "");
+    case "s": return who + " S " + P[o.a].id;
+    case "t": return who + " S " + P[o.a].id + " - " + L[o.b].id;
+    case "c": return who + " C " + P[o.a].id + " - " + P[o.b].id;
+    case "r": return o.a >= 0 ? who + " retreats to " + L[o.a].id : who + " disbands";
+    case "ba": return "Build A " + L[o.a].id;
+    case "bf": return "Build F " + L[o.a].id;
+    case "d": return "Disband the unit in " + P[L[o.a].prov].id;
+  }
+  return "";
+}
+
+// ------------------------------------------------------------------ the private sheet lives in this browser only
+const sheetKey = () => "parley-sheet-" + gameId;
+function loadSheet() {
+  if (!S || !S.sealKey) return;
+  let stored = null; try { stored = JSON.parse(localStorage.getItem(sheetKey()) || "null"); } catch { }
+  if (!stored || stored.key !== S.sealKey) { stored = { key: S.sealKey, orders: [] }; localStorage.setItem(sheetKey(), JSON.stringify(stored)); }
+  myOrders = stored.orders;
+}
+function saveSheet(extra) {
+  let stored = null; try { stored = JSON.parse(localStorage.getItem(sheetKey()) || "null"); } catch { }
+  if (!stored || stored.key !== S.sealKey) stored = { key: S.sealKey };
+  stored.orders = myOrders;
+  Object.assign(stored, extra || {});
+  localStorage.setItem(sheetKey(), JSON.stringify(stored));
+  return stored;
+}
+// Submit on: seal the sheet as it is now. Only the seal leaves this browser.
+async function sealNow() {
+  if (busy || !S.my) return; busy = true; flash = "";
+  try {
+    const text = encodeSheet(myOrders, S.my.power), salt = randomSalt();
+    const seal = sha256Hex("PS1|" + salt + "|" + S.my.power + "|" + S.sealKey + "|" + text);
+    saveSheet({ salt, text, seal });
+    await api(`/api/games/${gameId}/seal`, { token, sealKey: S.sealKey, seal });
+  } catch (e) { flash = e.message; }
+  busy = false; await poll();
+}
+async function unsubmit() {
+  if (busy) return; busy = true; flash = "";
+  try { await api(`/api/games/${gameId}/unsubmit`, { token }); } catch (e) { flash = e.message; }
+  busy = false; await poll();
+}
+// Every seal is in: open ours. The server checks it against the seal it already has.
+async function openNow() {
+  if (busy) return; busy = true;
+  let stored = null; try { stored = JSON.parse(localStorage.getItem(sheetKey()) || "null"); } catch { }
+  try {
+    if (!stored || stored.key !== S.sealKey || !stored.salt) throw new Error("this browser does not have the sheet that was sealed (was it sealed on another device?)");
+    await api(`/api/games/${gameId}/open`, { token, salt: stored.salt, orders: stored.text });
+  } catch (e) { flash = e.message; }
+  busy = false; await poll();
+}
+
+// ------------------------------------------------------------------ end-of-round sound (a placeholder tone; the real sound is chosen later)
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + i * 0.18);
+      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + i * 0.18 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.18 + 0.5);
+      o.start(ctx.currentTime + i * 0.18); o.stop(ctx.currentTime + i * 0.18 + 0.55);
+    });
+  } catch { }
+}
 
 // ------------------------------------------------------------------ home page
 async function home() {
   const [maps, games] = await Promise.all([api("/api/maps"), api("/api/games")]);
+  const saved = Object.keys(localStorage).filter(k => k.startsWith("parley-archive-"));
   $("#app").innerHTML = `
     <div class="cols"><div>
       <div class="card"><h2>Start a new game</h2>
         <label>Map</label>
-        <select id="nMap">${maps.map(m => `<option value="${esc(m.id)}">${esc(m.name)} (${m.powers} players, ${m.centres} centres)</option>`).join("")}</select>
+        <select id="nMap">${maps.map(m => `<option value="${esc(m.id)}" ${m.isDefault ? "selected" : ""}>${esc(m.name)} (${m.powers} players, ${m.centres} centres)</option>`).join("")}</select>
         <label>Game name</label><input id="nTitle" placeholder="Friday night game" size="30">
-        <label>Time limit per phase, in minutes (0 = no limit; good for play-by-Discord)</label>
-        <div class="row">orders <input id="nMove" type="number" min="0" value="0" style="width:70px"> retreats <input id="nRet" type="number" min="0" value="0" style="width:70px"> builds <input id="nAdj" type="number" min="0" value="0" style="width:70px"></div>
-        <label><input type="checkbox" id="nWait" checked> Wait for every player before resolving (untick for live games where people may drop)</label>
+        <label>Negotiation minutes per movement phase: first, second, ... (the last number repeats; 0 = no limit)</label>
+        <input id="nSched" value="30, 30, 15" size="20">
+        <div class="row small" style="margin-top:6px">retreats <input id="nRet" type="number" min="0" step="0.25" value="2" style="width:70px"> min, builds <input id="nAdj" type="number" min="0" step="0.25" value="3" style="width:70px"> min</div>
+        <label>Announcement of the orders</label>
+        <select id="nAnn"><option value="normal">read out one order at a time</option><option value="fast">fast</option><option value="off">off (show results at once)</option></select>
+        <label><input type="checkbox" id="nReady" checked> Everyone presses Ready before each negotiation clock starts</label>
+        <label><input type="checkbox" id="nWait"> Wait for players who are away (for slow play-by-Discord games; normally their units just hold)</label>
         <div class="err" id="nErr"></div>
         <button class="primary big" id="nGo">Create game</button>
       </div>
@@ -109,33 +249,49 @@ async function home() {
         <textarea id="iText" placeholder="Paste a game code (P1...) or a full game archive (PA1;...)"></textarea>
         <div class="err" id="iErr"></div>
         <button id="iGo">Resume</button>
+        ${saved.length ? `<p class="small muted">Your browser keeps a copy of every game you play in. Resume one of them:</p>` + saved.map(k => { let v = {}; try { v = JSON.parse(localStorage.getItem(k)); } catch { } return `<div class="row small"><button data-resume="${esc(k)}">Resume</button> ${esc(v.title || "a game")} · ${esc(v.label || "")}</div>`; }).join("") : ""}
       </div>
     </div><div>
       <div class="card"><h2>Games on this server</h2>
         ${games.length ? `<table>${games.map(g => `<tr><td><a href="/?g=${g.id}">${esc(g.title)}</a><div class="small muted">${esc(g.map)}</div></td><td class="small">${esc(g.phase)}</td><td class="small">${g.seats}/${g.powers}</td></tr>`).join("")}</table>` : `<p class="muted">None yet.</p>`}
       </div>
-      <div class="card small muted">Parley is an open-source negotiation game. Everyone enters orders in secret; they are revealed and resolved together. This flat web version exists for testing rules and maps with friends; the real thing is a VRChat world.</div>
+      <div class="card small muted">Parley is an open-source negotiation game. Everyone works on a secret order sheet; the sheets are sealed, opened together, read out and resolved at once. Not even the server sees an order before every sheet is sealed. This flat web version exists for testing rules and maps with friends; the real thing is a VRChat world.</div>
     </div></div>`;
   $("#nGo").onclick = async () => {
     try {
-      const r = await api("/api/games", { mapId: $("#nMap").value, title: $("#nTitle").value, moveSeconds: 60 * +$("#nMove").value, retreatSeconds: 60 * +$("#nRet").value, adjustSeconds: 60 * +$("#nAdj").value, waitForEveryone: $("#nWait").checked });
+      const r = await api("/api/games", { mapId: $("#nMap").value, title: $("#nTitle").value, moveSchedule: minutes($("#nSched").value), retreatSeconds: Math.round(60 * +$("#nRet").value), adjustSeconds: Math.round(60 * +$("#nAdj").value), announce: $("#nAnn").value, readyUp: $("#nReady").checked, waitForEveryone: $("#nWait").checked });
       location.href = "/?g=" + r.id;
     } catch (e) { $("#nErr").textContent = e.message; }
   };
-  $("#iGo").onclick = async () => {
-    try { const r = await api("/api/games/import", { text: $("#iText").value }); location.href = "/?g=" + r.id; }
-    catch (e) { $("#iErr").textContent = e.message; }
-  };
+  const resume = async text => { const r = await api("/api/games/import", { text }); location.href = "/?g=" + r.id; };
+  $("#iGo").onclick = async () => { try { await resume($("#iText").value); } catch (e) { $("#iErr").textContent = e.message; } };
+  document.querySelectorAll("[data-resume]").forEach(b => b.onclick = async () => {
+    try { await resume(JSON.parse(localStorage.getItem(b.dataset.resume)).archive); } catch (e) { $("#iErr").textContent = e.message; }
+  });
 }
 
 // ------------------------------------------------------------------ game page
 async function startGamePage() {
-  try { M = await api(`/api/games/${gameId}/map`); } catch { $("#app").innerHTML = `<div class="card">No such game. <a href="/">Back</a></div>`; return; }
+  try { M = await api(`/api/games/${gameId}/map`); }
+  catch {
+    // the server lost this game (or it was hosted somewhere else): every browser keeps a copy
+    let kept = null; try { kept = JSON.parse(localStorage.getItem("parley-archive-" + gameId) || "null"); } catch { }
+    $("#app").innerHTML = `<div class="card">This server does not have that game. ${kept ? `Your browser kept a copy (${esc(kept.title)}, ${esc(kept.label)}). <button class="primary" id="kResume">Resume it here</button><div class="err" id="kErr"></div>` : ""} <a href="/">Back</a></div>`;
+    if (kept) $("#kResume").onclick = async () => { try { const r = await api("/api/games/import", { text: kept.archive }); location.href = "/?g=" + r.id; } catch (e) { $("#kErr").textContent = e.message; } };
+    return;
+  }
   M.provs.forEach(p => { p.pts = p.shape ? p.shape : ""; });
   $("#app").innerHTML = `<div class="cols"><div><div id="actions"></div><div class="board"><svg id="svg" viewBox="0 0 ${M.width} ${M.height}"></svg></div><div id="below"></div></div><div id="side"></div></div>`;
   await poll();
-  setInterval(poll, 2000);
-  setInterval(tickClock, 500);
+  setInterval(poll, 1500);
+  setInterval(tickClock, 250);
+}
+
+async function keepCopy() {
+  try {
+    const archive = await api(`/api/games/${gameId}/archive`);
+    if (archive) localStorage.setItem("parley-archive-" + gameId, JSON.stringify({ title: S.title, label: S.label, archive }));
+  } catch { }
 }
 
 async function poll() {
@@ -145,23 +301,31 @@ async function poll() {
   if (S.serial !== lastSerial) {
     lastSerial = S.serial; ui = { step: null }; view = null; last = null;
     if (S.historyCount >= 2) { try { last = await api(`/api/games/${gameId}/history/${S.historyCount - 2}`); } catch { } }
+    if (S.historyCount > 0) keepCopy();
   }
-  if (S.my && !ui.dirty) myOrders = S.my.data.orders.filter(o => o.k !== "h" && !(o.k === "r" && o.a < 0)).map(o => ({ k: o.k, u: o.u, a: o.a, b: o.b, via: o.via, text: o.text }));
-  if (!S.my) myOrders = [];
+  if (lastStage === ORDERS && (S.stage === CLOSING || S.stage === REVEAL || S.stage === ANNOUNCE)) chime();
+  lastStage = S.stage;
+  if (S.my) loadSheet(); else myOrders = [];
+  // what a device does by itself: seal whatever is on the sheet when time is up, open it when every seal is in
+  if (S.my && !busy) {
+    if (S.stage === CLOSING && S.my.needs && !S.my.sealedOrders) { sealNow(); return; }
+    if (S.stage === REVEAL && S.my.sealedOrders && !S.my.opened) { openNow(); return; }
+  }
   render();
 }
 
 function tickClock() {
   if (!S) return;
   let t = clockBase;
-  if (S.stage === 1 && t >= 0) t = Math.max(0, clockBase - (Date.now() - clockAt) / 1000);
-  $("#hClock").textContent = S.stage === 1 || S.stage === 2 ? fmtTime(t) : "";
+  const running = S.stage === ORDERS || S.stage === CLOSING || S.stage === REVEAL || S.stage === ANNOUNCE;
+  if (running && t >= 0) t = Math.max(0, clockBase - (Date.now() - clockAt) / 1000);
+  $("#hClock").textContent = running || S.stage === PAUSED ? fmtTime(t) : "";
 }
 
 function render() {
   $("#hTitle").textContent = S.title + " · " + M.name;
-  $("#hPhase").textContent = seasonName(S.label);
-  $("#hStage").textContent = ["waiting to start", "", "paused", "finished"][S.stage];
+  $("#hPhase").textContent = seasonName(S.stage === ANNOUNCE && S.announce ? S.announce.label : S.label);
+  $("#hStage").textContent = STAGE_TEXT[S.stage];
   tickClock();
   drawBoard(); drawSide(); drawActions(); drawBelow();
 }
@@ -176,20 +340,23 @@ function el(tag, attrs, parent, text) {
 function provShape(p, cls, parent, extra) {
   const a = Object.assign({ class: cls }, extra || {});
   if (p.pts) return el("polygon", Object.assign(a, { points: p.pts }), parent);
+  if (p.path) return el("path", Object.assign(a, { d: p.path }), parent);
   return el("circle", Object.assign(a, { cx: p.x, cy: p.y, r: 24 }), parent);
 }
 const powerColor = i => i >= 0 && i < M.powers.length ? M.powers[i].color : "#999";
+const canEdit = () => !view && S.my && !S.my.submitted && (S.stage === ORDERS || S.stage === PAUSED);
+// while the orders are read out the board still shows the position before them
+const reading = () => !view && S.stage === ANNOUNCE && S.announce && S.announce.at < 3 && last;
 
 function highlighted() {
-  // provinces the player may tap right now, given the tap sequence so far
   const set = new Set();
-  if (view || !S.my || S.my.locked || S.stage === 0 || S.stage === 3) return set;
-  const o = S.my.data.options, L = M.locs;
+  if (!canEdit() || !S.my.needs) return set;
+  const o = S.my.options, L = M.locs;
   if (S.phase === 0) {
     if (!ui.step) o.units.forEach(u => set.add(L[u.l].prov));
     else if (ui.step === "move") ui.unit.moves.forEach(m => set.add(L[m.l].prov));
     else if (ui.step === "sup") ui.unit.sup.forEach(s => set.add(s.p));
-    else if (ui.step === "sup2") ui.sup.to.forEach(t => set.add(t < 0 ? ui.sup.p : t));
+    else if (ui.step === "sup2") ui.sup.to.forEach(t => set.add(t < 0 ? ui.sup.p : L[t].prov));
     else if (ui.step === "con") ui.unit.con.forEach(c => set.add(c.p));
     else if (ui.step === "con2") ui.con.to.forEach(t => set.add(t));
   } else if (S.phase === 1) {
@@ -204,27 +371,31 @@ function highlighted() {
 
 function drawBoard() {
   const svg = $("#svg"); svg.innerHTML = "";
-  const st = view || S;
+  const st = view || (reading() ? last : S);
   const defs = el("defs", {}, svg);
-  for (const [id, col] of [["ah", "#222"], ["ahg", "#2f7d3f"], ["ahr", "#b3402e"]]) {
+  for (const [id, col] of [["ah", "#222"], ["ahg", "#2f7d3f"], ["ahr", "#b3402e"], ["ahb", "#1f5fa0"]]) {
     const m = el("marker", { id, viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
     el("path", { d: "M0,0 L10,5 L0,10 z", fill: col }, m);
   }
-  if (!M.drawn) M.links.forEach(([a, b]) => el("line", { x1: M.provs[a].x, y1: M.provs[a].y, x2: M.provs[b].x, y2: M.provs[b].y, stroke: "#b9b3a4", "stroke-width": 1.5 }, svg));
+  if (M.art) { const g = el("g", { "pointer-events": "none" }, svg); g.innerHTML = M.art; }
+  if (!M.drawn && !M.art) M.links.forEach(([a, b]) => el("line", { x1: M.provs[a].x, y1: M.provs[a].y, x2: M.provs[b].x, y2: M.provs[b].y, stroke: "#b9b3a4", "stroke-width": 1.5 }, svg));
   const hl = highlighted();
   M.provs.forEach((p, i) => {
-    const s = provShape(p, "prov hit " + (p.type === 2 ? "sea" : "land"), svg);
+    const s = provShape(p, "prov hit " + (p.type === 2 ? "sea" : "land"), svg, M.art ? { fill: "transparent", stroke: "none" } : {});
     s.addEventListener("click", () => tapProvince(i));
     el("title", {}, s, p.name + (p.sc ? " (supply centre)" : ""));
     const owner = st.owners[i];
-    if (owner >= 0) provShape(p, "", svg, { fill: powerColor(owner), "fill-opacity": .32, "pointer-events": "none", stroke: "none" });
+    if (owner >= 0 && p.type !== 2) provShape(p, "", svg, { fill: powerColor(owner), "fill-opacity": M.art ? .45 : .32, "pointer-events": "none", stroke: "none" });
   });
   M.provs.forEach((p, i) => {
-    if (p.sc) el("rect", { x: p.x - 4, y: p.y + 13, width: 8, height: 8, fill: st.owners[i] >= 0 ? powerColor(st.owners[i]) : "#fff", stroke: "#333", "stroke-width": 1.2, "pointer-events": "none", transform: `rotate(45 ${p.x} ${p.y + 17})` }, svg);
-    el("text", { x: p.x, y: p.y - 13, class: "plabel" }, svg, p.id);
+    if (p.sc && !M.art) el("rect", { x: p.x - 4, y: p.y + 13, width: 8, height: 8, fill: st.owners[i] >= 0 ? powerColor(st.owners[i]) : "#fff", stroke: "#333", "stroke-width": 1.2, "pointer-events": "none", transform: `rotate(45 ${p.x} ${p.y + 17})` }, svg);
+    if (!M.art) el("text", { x: p.x, y: p.y - 13, class: "plabel" }, svg, p.id);
   });
-  // order arrows: mine (now) or everybody's (when looking at a past phase)
-  const arrows = view ? view.orders.map(o => Object.assign({ col: o.ok ? "g" : "r" }, o)) : (S.phase === 0 || S.phase === 1 ? myOrders.map(o => ({ k: { m: 1, s: 2, t: 3, c: 4, r: 1 }[o.k], u: o.u, a: o.a, b: o.b, col: "" })) : []);
+  // arrows: my sheet (now), everybody's (a past phase), or the orders read out so far (announcement)
+  let arrows = [];
+  if (view) arrows = view.orders.map(o => Object.assign({ col: o.ok ? "g" : "r" }, o));
+  else if (reading()) arrows = S.announce.lines.slice(0, S.announce.read).filter(x => x.from >= 0 && x.to >= 0).map(x => ({ k: 1, u: x.from, a: x.to, b: -1, col: "b" }));
+  else if (S.stage === ORDERS || S.stage === PAUSED || S.stage === CLOSING || S.stage === REVEAL) arrows = S.phase === 0 || S.phase === 1 ? myOrders.map(o => ({ k: { m: 1, s: 2, t: 3, c: 4, r: 1 }[o.k], u: o.u, a: o.a, b: o.b, col: "" })) : [];
   arrows.forEach(o => {
     if (o.u < 0 || o.a < 0) return;
     const from = M.provs[M.locs[o.u].prov];
@@ -235,18 +406,18 @@ function drawBoard() {
     else if (o.k === 4) { to = M.provs[o.a]; dash = "2 4"; }
     else return;
     const dx = to.x - from.x, dy = to.y - from.y, d = Math.hypot(dx, dy) || 1, cut = 15;
-    const colour = o.col === "g" ? "#2f7d3f" : o.col === "r" ? "#b3402e" : "#222";
+    const colour = { g: "#2f7d3f", r: "#b3402e", b: "#1f5fa0" }[o.col] || "#222";
     el("line", { x1: from.x + dx / d * cut, y1: from.y + dy / d * cut, x2: to.x - dx / d * cut, y2: to.y - dy / d * cut, stroke: colour, "stroke-width": 3, "stroke-dasharray": dash, "marker-end": `url(#ah${o.col})`, "pointer-events": "none", opacity: .85 }, svg);
   });
+  const mine = S.my ? S.my.power : (S.me ? S.me.power : -1);
   const drawUnit = (u, dx, dashed) => {
-    const p = M.provs[M.locs[u.l].prov], x = p.x + dx, y = p.y + 2 + dx / 2;
-    const a = { fill: powerColor(u.p), stroke: dashed ? "#111" : "#fff", "stroke-width": 2, "pointer-events": "none" };
+    const p = M.provs[M.locs[u.l].prov], ux = M.locs[u.l].x !== undefined ? M.locs[u.l].x : p.x, uy = M.locs[u.l].y !== undefined ? M.locs[u.l].y : p.y;
+    const x = ux + dx, y = uy + 2 + dx / 2;
+    const a = { fill: powerColor(u.p), stroke: dashed ? "#111" : (u.p === mine ? "#ffd200" : "#fff"), "stroke-width": u.p === mine ? 3 : 2, "pointer-events": "none" };
     if (dashed) a["stroke-dasharray"] = "3 2";
     if (u.t === 1) el("path", Object.assign(a, { d: `M${x - 12},${y + 8} L${x + 12},${y + 8} L${x},${y - 12} z` }), svg);
     else el("circle", Object.assign(a, { cx: x, cy: y, r: 10 }), svg);
     el("text", { x, y: y + 4, class: "ulabel" }, svg, u.t === 1 ? "F" : "A");
-    const loc = M.locs[u.l];
-    if (loc.coast) el("text", { x: x + 16, y: y + 4, class: "plabel" }, svg, loc.coast);
   };
   st.units.forEach(u => drawUnit(u, 0, false));
   st.dislodged.forEach(u => drawUnit(u, 16, true));
@@ -254,11 +425,11 @@ function drawBoard() {
   if (ui.unit && !view) provShape(M.provs[M.locs[ui.unit.l].prov], "sel", svg);
 }
 
-// ---- tapping
+// ---- tapping (edits the private sheet in this browser only)
 function tapProvince(i) {
-  if (view || !S.my || S.my.locked) return;
+  if (!canEdit() || !S.my.needs) return;
   if (!highlighted().has(i)) { if (ui.step) { ui = { step: null }; render(); } return; }
-  const o = S.my.data.options, L = M.locs;
+  const o = S.my.options, L = M.locs;
   if (S.phase === 0) {
     if (!ui.step) { ui = { step: "unit", unit: o.units.find(u => L[u.l].prov === i) }; }
     else if (ui.step === "move") {
@@ -268,8 +439,10 @@ function tapProvince(i) {
     }
     else if (ui.step === "sup") { ui.sup = ui.unit.sup.find(s => s.p === i); ui.step = "sup2"; }
     else if (ui.step === "sup2") {
-      const hold = i === ui.sup.p;
-      return setOrder(hold ? { k: "s", u: ui.unit.l, a: ui.sup.p, b: -1 } : { k: "t", u: ui.unit.l, a: ui.sup.p, b: i });
+      if (i === ui.sup.p && ui.sup.to.includes(-1)) return setOrder({ k: "s", u: ui.unit.l, a: ui.sup.p, b: -1 });
+      const c = ui.sup.to.filter(t => t >= 0 && L[t].prov === i);
+      if (c.length === 1) return setOrder({ k: "t", u: ui.unit.l, a: ui.sup.p, b: c[0] });
+      ui.step = "pick"; ui.pick = c.map(t => ({ label: L[t].name, order: { k: "t", u: ui.unit.l, a: ui.sup.p, b: t } }));
     }
     else if (ui.step === "con") { ui.con = ui.unit.con.find(c => c.p === i); ui.step = "con2"; }
     else if (ui.step === "con2") return setOrder({ k: "c", u: ui.unit.l, a: ui.con.p, b: i });
@@ -289,7 +462,7 @@ function tapProvince(i) {
       const have = myOrders.findIndex(x => x.k === "d" && L[x.a].prov === i);
       if (have >= 0) myOrders.splice(have, 1); else myOrders.push({ k: "d", u: -1, a: l, b: -1 });
       while (myOrders.length > -S.my.delta) myOrders.shift();
-      return sendOrders();
+      saveSheet(); return render();
     }
   }
   render();
@@ -306,16 +479,21 @@ function setOrder(order) {
     if (order.k !== "h" && !(order.k === "r" && order.a < 0)) myOrders.push(order);
   }
   ui = { step: null };
-  sendOrders();
+  saveSheet();
+  render();
 }
 
-async function sendOrders(lock) {
-  ui.dirty = true; flash = "";
-  try {
-    await api(`/api/games/${gameId}/orders`, { token, serial: S.serial, orders: lock === undefined ? myOrders.map(o => ({ k: o.k, u: o.u, a: o.a, b: o.b, via: !!o.via })) : null, lock: lock === undefined ? null : lock });
-  } catch (e) { flash = e.message; }
-  ui.dirty = false;
-  await poll();
+function drawAnnouncement() {
+  const A = S.announce;
+  let h = `<div class="ann"><h3>${A.at === 0 ? "The round is over. Back to the map..." : A.at >= 3 ? "Results of " + esc(seasonName(A.label)) : "The orders for " + esc(seasonName(A.label))}</h3>`;
+  M.powers.forEach((pw, i) => {
+    const lines = A.lines.map((x, k) => Object.assign({ k }, x)).filter(x => x.p === i && x.k < A.read);
+    const naming = A.atPower === i;
+    if (!lines.length && !naming) return;
+    h += `<div style="margin:6px 0"><span class="dot" style="display:inline-block;background:${esc(pw.color)}"></span> <b>${esc(pw.name)}</b>${A.status[i] ? ` <span class="small">(${esc(A.status[i])})</span>` : ""}<div>` +
+      lines.map(x => `<div class="${x.k === A.read - 1 && A.at === 2 ? "cur" : "done"}" data-line="${x.k}">${esc(x.text)}${A.at >= 3 && x.res ? ` <span class="res">— ${esc(x.res)}</span>` : ""}</div>`).join("") + `</div></div>`;
+  });
+  return h + `</div>`;
 }
 
 function drawActions() {
@@ -324,8 +502,17 @@ function drawActions() {
     $("#vBack").onclick = () => { view = null; render(); };
     if ($("#vRoll")) $("#vRoll").onclick = async () => { if (confirm("Roll back? Everything after this phase is discarded.")) { await host({ action: "rollback", index: view.index }); } };
     return; }
-  if (!S.my || S.stage === 0 || S.stage === 3) { box.innerHTML = ""; return; }
-  if (S.my.locked) { box.innerHTML = `<div class="actions">Your orders are locked in. <button id="aUnlock">Unlock to change them</button></div>`; $("#aUnlock").onclick = () => sendOrders(false); return; }
+  if (S.stage === ANNOUNCE && S.announce) { box.innerHTML = drawAnnouncement(); return; }
+  if (S.stage === READY) {
+    const me = S.my || (S.me && S.me.power >= 0 ? { power: S.me.power } : null);
+    const r = me ? S.seats[me.power].ready : false;
+    box.innerHTML = `<div class="actions">Take a break. The next clock starts when everyone has pressed Ready. ${me ? `<button class="${r ? "" : "primary"} big" id="aReady">${r ? "Not ready yet" : "Ready"}</button>` : ""}</div>`;
+    if ($("#aReady")) $("#aReady").onclick = async () => { try { await api(`/api/games/${gameId}/ready`, { token, value: !r }); } catch (e) { flash = e.message; } poll(); };
+    return;
+  }
+  if (S.stage === CLOSING || S.stage === REVEAL) { box.innerHTML = `<div class="actions">${S.stage === CLOSING ? "Time is up. Each sheet is being sealed as it stands." : "Every sheet is sealed. Opening them..."}${flash ? `<div class="err">${esc(flash)}</div>` : ""}</div>`; return; }
+  if (!S.my || S.stage === LOBBY || S.stage === FINISHED) { box.innerHTML = ""; return; }
+  if (S.my.submitted) { box.innerHTML = `<div class="actions">Your orders are sealed and submitted. Switch <b>Submitted</b> off to change them.${flash ? `<div class="err">${esc(flash)}</div>` : ""}</div>`; return; }
   if (!S.my.needs) { box.innerHTML = `<div class="actions">Nothing for you to do this phase.</div>`; return; }
   let h = "";
   const L = M.locs;
@@ -339,7 +526,7 @@ function drawActions() {
   } else if (ui.step) {
     h = ({ move: "Tap the destination.", sup: "Tap the unit to support.", sup2: "Tap where that unit is going (tap the unit itself to support it staying put).", con: "Tap the army to carry.", con2: "Tap where the army is going." }[ui.step]) + ` <button data-a="x">Cancel</button>`;
   } else {
-    h = S.phase === 0 ? "Tap one of your units to give it an order. Units without an order hold."
+    h = S.phase === 0 ? "Tap one of your units to give it an order. Units without an order hold. When the clock runs out, whatever is on your sheet is used."
       : S.phase === 1 ? "Tap a dislodged unit (dashed outline) to retreat it. Units without an order are disbanded."
       : S.my.delta > 0 ? `You may build ${S.my.delta} unit${S.my.delta > 1 ? "s" : ""}. Tap a highlighted home centre.`
       : `You must disband ${-S.my.delta} unit${S.my.delta < -1 ? "s" : ""}. Tap the unit${S.my.delta < -1 ? "s" : ""} to remove.`;
@@ -364,46 +551,54 @@ function drawSide() {
   if (!S.me) {
     h += `<div class="card"><h2>Join this game</h2><label>Your name</label><div class="row"><input id="jName" maxlength="24"><button class="primary" id="jGo">Join</button></div><div class="err" id="jErr"></div><p class="small muted">You can watch without joining. After joining, this browser remembers you; keep the personal link shown afterwards if you want to play from another device.</p></div>`;
   }
+  // my sheet first: it is what a player looks at most
+  if (S.my && S.stage !== LOBBY && S.stage !== FINISHED) {
+    h += `<div class="card"><h2>Your order sheet (${esc(M.powers[S.my.power].name)})</h2>`;
+    const edit = canEdit();
+    h += myOrders.length ? `<ul class="orders">${myOrders.map((o, i) => `<li><span>${esc(orderText(o))}</span>${edit ? `<button data-del="${i}" title="Remove">×</button>` : ""}</li>`).join("")}</ul>` : `<p class="muted small">${S.my.needs ? "Nothing entered yet: your units hold." : "Nothing to order this phase."}</p>`;
+    if (S.my.needs && (S.stage === ORDERS || S.stage === PAUSED)) h += `<button class="toggle ${S.my.submitted ? "on" : ""}" id="oToggle"><span>${S.my.submitted ? "Submitted" : "Not submitted"}</span><span class="knob"></span></button>`;
+    h += `<p class="small muted">Only you can see this sheet. It stays in this browser; the server only receives a sealed fingerprint until every sheet is sealed.</p>`;
+    h += `<div class="row"><button id="oDraw">${S.seats[S.my.power].vote ? "Withdraw draw vote" : "Vote for a draw"}</button></div></div>`;
+  }
   // seats
   h += `<div class="card"><h2>Powers</h2>`;
   S.seats.forEach(s => {
     const pw = M.powers[s.power];
     let tags = "";
-    if (S.stage === 0) tags = s.name ? "" : (S.me && S.me.power < 0 ? `<button data-seat="${s.power}">Take</button>` : "");
+    if (S.stage === LOBBY) tags = s.name ? "" : (S.me && S.me.power < 0 ? `<button data-seat="${s.power}">Take</button>` : "");
     else if (s.gone) tags = `<span class="tag">out</span>`;
-    else if (S.stage !== 3 && s.needs) tags = s.locked ? `<span class="tag ok">ready</span>` : `<span class="tag wait">${s.name ? "thinking" : "no player"}</span>`;
-    if (S.stage !== 0 && !s.name && S.me && S.me.power < 0 && !s.gone) tags += ` <button data-seat="${s.power}">Take over</button>`;
+    else if (S.stage === READY) tags = s.name && s.present ? (s.ready ? `<span class="tag ok">ready</span>` : `<span class="tag wait">not ready</span>`) : "";
+    else if (S.stage === REVEAL && s.needs) tags = s.opened ? `<span class="tag ok">opened</span>` : `<span class="tag wait">${s.submitted ? "opening" : "no orders"}</span>`;
+    else if (S.stage !== FINISHED && s.needs) tags = s.submitted ? `<span class="tag ok">submitted</span>` : `<span class="tag wait">${s.name ? "working" : "no player"}</span>`;
+    if (S.stage !== LOBBY && !s.name && S.me && S.me.power < 0 && !s.gone) tags += ` <button data-seat="${s.power}">Take over</button>`;
+    else if (S.stage !== LOBBY && s.name && !s.present && S.me && S.me.power < 0 && !s.gone) tags += ` <button data-seat="${s.power}">Take over</button>`;
     if (s.vote) tags += ` <span class="tag">votes draw</span>`;
     if (S.isHost && s.name && S.me && s.name !== S.me.name) tags += ` <button data-free="${s.power}" title="Free this seat">×</button>`;
-    h += `<div class="seat"><span class="dot" style="background:${esc(pw.color)}"></span><div><b>${esc(pw.name)}</b>${S.winner === s.power ? " 🏆" : ""}<div class="small muted">${s.name ? esc(s.name) + (s.present || S.stage === 0 ? "" : " (away)") : "nobody"}${S.stage ? ` · ${s.centres} centres, ${s.units} units` : ""}</div></div><div>${tags}</div></div>`;
+    h += `<div class="seat"><span class="dot" style="background:${esc(pw.color)}"></span><div><b>${esc(pw.name)}</b>${S.winner === s.power ? " 🏆" : ""}<div class="small muted">${s.name ? esc(s.name) + (s.present || S.stage === LOBBY ? "" : " (away: units hold)") : "nobody"}${S.stage ? ` · ${s.centres} centres, ${s.units} units` : ""}</div></div><div>${tags}</div></div>`;
   });
-  h += `<p class="small muted">Victory: ${M.victory} centres.</p>`;
-  if (S.stage === 0 && S.me && S.me.power >= 0) h += `<button id="sLeave">Leave my seat</button>`;
+  h += `<p class="small muted">Victory: ${M.victory} centres. Host: ${esc(S.host || "nobody")}.</p>`;
+  if (S.stage === LOBBY && S.me && S.me.power >= 0) h += `<button id="sLeave">Leave my seat</button>`;
   h += `</div>`;
-  if (S.stage === 3) h += `<div class="card"><h2>Game over</h2>${S.drawn ? "The players agreed a draw." : S.winner >= 0 ? `<b>${esc(M.powers[S.winner].name)}</b> wins.` : ""}</div>`;
-  // my orders
-  if (S.my && S.stage !== 0 && S.stage !== 3) {
-    h += `<div class="card"><h2>Your orders (${esc(M.powers[S.my.power].name)})</h2>`;
-    const shown = S.my.data.orders;
-    h += shown.length ? `<ul class="orders">${shown.map((o, i) => `<li><span>${esc(o.text)}</span>${!S.my.locked && o.k !== "h" && !(o.k === "r" && o.a < 0) ? `<button data-del="${i}" title="Remove">×</button>` : ""}</li>`).join("")}</ul>` : `<p class="muted small">${S.my.needs ? "None yet." : "Nothing to order this phase."}</p>`;
-    if (S.my.needs) h += S.my.locked ? `<button id="oUnlock">Unlock</button>` : `<button class="primary big" id="oLock">Lock in</button>`;
-    h += `<p class="small muted">Nobody else can see these until the phase resolves.</p>`;
-    h += `<div class="row"><button id="oDraw">${S.seats[S.my.power].vote ? "Withdraw draw vote" : "Vote for a draw"}</button></div></div>`;
-  }
+  if (S.stage === FINISHED) h += `<div class="card"><h2>Game over</h2>${S.drawn ? "The players agreed a draw." : S.winner >= 0 ? `<b>${esc(M.powers[S.winner].name)}</b> wins.` : ""}</div>`;
   // host
   if (S.isHost) {
+    const nextLabel = { 1: "End the phase now", 2: "End the phase now", 4: "Stop waiting for seals", 5: "Stop waiting for sheets", 6: "Skip the announcement", 7: "Start the clock now" }[S.stage];
     h += `<div class="card"><h2>Host controls</h2><div class="row">`;
-    if (S.stage === 0) h += `<button class="primary" id="hStart">Start the game</button>`;
-    if (S.stage === 1) h += `<button id="hPause">Pause</button><button id="hResolve">Resolve now</button>`;
-    if (S.stage === 2) h += `<button class="primary" id="hResume">Resume</button><button id="hResolve">Resolve now</button>`;
-    h += `</div><label>Minutes per phase (0 = no limit)</label><div class="row small">orders <input id="tM" type="number" min="0" style="width:60px" value="${S.timers[0] / 60}"> retreats <input id="tR" type="number" min="0" style="width:60px" value="${S.timers[1] / 60}"> builds <input id="tA" type="number" min="0" style="width:60px" value="${S.timers[2] / 60}"> <button id="hTimers">Set</button></div>
+    if (S.stage === LOBBY) h += `<button class="primary" id="hStart">Start the game</button>`;
+    if (S.stage === ORDERS) h += `<button id="hPause">Pause the clock</button>`;
+    if (S.stage === PAUSED) h += `<button class="primary" id="hResume">Resume the clock</button>`;
+    if (nextLabel) h += `<button id="hNext">${nextLabel}</button>`;
+    h += `</div><label>Negotiation minutes per movement phase (first, second, ...; the last repeats)</label><input id="tS" size="16" value="${esc(S.schedule.map(x => x / 60).join(", "))}">
+      <div class="row small" style="margin-top:4px">retreats <input id="tR" type="number" min="0" step="0.25" style="width:60px" value="${S.timers[0] / 60}"> builds <input id="tA" type="number" min="0" step="0.25" style="width:60px" value="${S.timers[1] / 60}"></div>
+      <div class="row small" style="margin-top:4px">announcement <select id="tN">${["normal", "fast", "off"].map(v => `<option ${S.announceSpeed === v ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <label style="margin:0"><input type="checkbox" id="tY" ${S.readyUp ? "checked" : ""}> ready-up</label> <button id="hTimers">Set</button></div>
       <label><input type="checkbox" id="hWait" ${S.waitForAbsent ? "checked" : ""}> Wait for players who are away</label>
-      <p class="small muted">Unclaimed powers hold every turn. "Resolve now" uses whatever has been entered.</p></div>`;
+      <p class="small muted">Pause is for real-life interruptions. Unclaimed powers and players who are away hold. Changes to the clock apply from the next phase.</p></div>`;
   }
   // invite + save
   h += `<div class="card"><h2>Invite and save</h2><p class="small">Send friends this page's address: <code>${esc(location.origin + "/?g=" + gameId)}</code></p>`;
   if (token) h += `<p class="small">Your personal link (do not share; it lets you play from another device): <button id="cLink">Copy</button></p>`;
-  if (S.code) h += `<p class="small">Game code for this exact position (paste on any Parley server or, later, in the VR world):</p><code class="gc" id="gc">${esc(S.code)}</code><div class="row" style="margin-top:6px"><button id="cCode">Copy code</button><button id="cArch">Copy full archive (with history)</button></div>`;
+  if (S.code) h += `<p class="small">Game code for this exact position (paste on any Parley server or, later, in the VR world):</p><code class="gc" id="gc">${esc(S.code)}</code><div class="row" style="margin-top:6px"><button id="cCode">Copy code</button><button id="cArch">Copy full archive (with history)</button></div><p class="small muted">This browser also keeps its own copy of the whole game, so it can be resumed even if the server loses it.</p>`;
   h += `</div>`;
   side.innerHTML = h;
 
@@ -414,17 +609,14 @@ function drawSide() {
   });
   side.querySelectorAll("[data-seat]").forEach(b => b.onclick = async () => { try { await api(`/api/games/${gameId}/seat`, { token, power: +b.dataset.seat }); } catch (e) { alert(e.message); } lastSerial = -1; poll(); });
   side.querySelectorAll("[data-free]").forEach(b => b.onclick = () => { if (confirm("Free this seat? That player's link stops working.")) host({ action: "free", index: +b.dataset.free }); });
-  side.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
-    const o = S.my.data.orders[+b.dataset.del];
-    myOrders = myOrders.filter(x => !(x.k === o.k && x.u === o.u && x.a === o.a));
-    sendOrders();
-  });
+  side.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { myOrders.splice(+b.dataset.del, 1); saveSheet(); render(); });
   on("sLeave", async () => { await api(`/api/games/${gameId}/seat`, { token, power: -1 }); poll(); });
-  on("oLock", () => sendOrders(true)); on("oUnlock", () => sendOrders(false));
+  on("oToggle", () => S.my.submitted ? unsubmit() : sealNow());
   on("oDraw", async () => { await api(`/api/games/${gameId}/draw`, { token, value: !S.seats[S.my.power].vote }); poll(); });
   on("hStart", () => host({ action: "start" })); on("hPause", () => host({ action: "pause" }));
-  on("hResume", () => host({ action: "resume" })); on("hResolve", () => { if (confirm("Resolve this phase now with the orders entered so far?")) host({ action: "resolve" }); });
-  on("hTimers", () => host({ action: "timers", moveSeconds: 60 * +$("#tM").value, retreatSeconds: 60 * +$("#tR").value, adjustSeconds: 60 * +$("#tA").value }));
+  on("hResume", () => host({ action: "resume" }));
+  on("hNext", () => { if (S.stage > 2 || confirm("End this phase now? Whatever is on each sheet is sealed and used.")) host({ action: "next" }); });
+  on("hTimers", () => host({ action: "timers", moveSchedule: minutes($("#tS").value), retreatSeconds: Math.round(60 * +$("#tR").value), adjustSeconds: Math.round(60 * +$("#tA").value), announce: $("#tN").value, readyUp: $("#tY").checked }));
   const w = $("#hWait"); if (w) w.onchange = () => host({ action: "wait", value: w.checked });
   const copy = async (text, btn) => { try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; } catch { prompt("Copy this:", text); } };
   on("cCode", e => copy(S.code, e.target));
@@ -435,14 +627,15 @@ function drawSide() {
 // ---- below the board: results and history
 function drawBelow() {
   const box = $("#below");
-  const entry = view || last;
+  const entry = view || (S.stage === ANNOUNCE ? null : last);
   let h = "";
   if (entry && entry.orders.length) {
-    h += `<div class="card"><h2>${view ? "Orders in " : "What just happened: "}${esc(seasonName(entry.label))}</h2>`;
+    h += `<div class="card" id="results"><h2>${view ? "Orders in " : "What just happened: "}${esc(seasonName(entry.label))}</h2>`;
     M.powers.forEach((pw, i) => {
       const mine = entry.orders.filter(o => o.p === i);
+      const note = !view && S.announce && S.announce.status[i] ? ` <span class="small muted">(${esc(S.announce.status[i])})</span>` : "";
       if (!mine.length) return;
-      h += `<div style="margin:6px 0"><span class="dot" style="display:inline-block;background:${esc(pw.color)}"></span> <b>${esc(pw.name)}</b><div class="small">` +
+      h += `<div style="margin:6px 0"><span class="dot" style="display:inline-block;background:${esc(pw.color)}"></span> <b>${esc(pw.name)}</b>${note}<div class="small">` +
         mine.map(o => `${esc(o.text)} <span class="${o.ok ? "res-ok" : "res-bad"}">${o.res === "ok" ? "" : "— " + esc(o.res)}</span>`).join("<br>") + `</div></div>`;
     });
     h += `</div>`;
