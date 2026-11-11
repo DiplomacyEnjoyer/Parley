@@ -123,8 +123,9 @@ async function readyAll(players) {
   for (const p of players) await waitFor(p, () => S.stage === 1 && S.my, null, 20000);
 }
 // waits for the phase that is open now to be resolved and the next one to be open (or ready-up)
-async function nextPhase(p, ms = 120000) {
-  const serial = (await state(p)).serial;
+// pass the serial read before anything was submitted: the phase may already have ended
+async function nextPhase(p, ms = 120000, serialBefore) {
+  const serial = serialBefore !== undefined ? serialBefore : (await state(p)).serial;
   await waitFor(p, s => S.serial !== s && (S.stage === 1 || S.stage === 7 || S.stage === 3 || S.stage === 2), serial, ms);
   return state(p);
 }
@@ -192,6 +193,7 @@ async function playGame(mapId) {
 
   // ---- phase 1: timer runs out with partial sheets
   log('timer expiry with partial sheets');
+  const serial1 = s.serial;
   const unitsBefore = s.units.map(u => u.p + ':' + u.l).sort().join(' ');
   const n1 = await randomSheet(players[0], 1); const sheet0 = await players[0].page.evaluate(() => encodeSheet(myOrders, S.my.power)); await toggleSubmit(players[0], true);           // submitted
   const n2 = nBrowsers > 1 ? await randomSheet(players[1], 1) : 0;                            // entered, never submitted
@@ -229,7 +231,7 @@ async function playGame(mapId) {
     check(!bad2.ok, 'opening with a different salt is refused');
     check((await api(`/api/games/${gid}/open`, { token: cheat.token, salt: cheat.salt, orders: '' })).ok, 'opening the sealed sheet is accepted');
   }
-  s = await nextPhase(host);
+  s = await nextPhase(host, 120000, serial1);
   const r1 = await lastResults(host);
   check(r1 && r1.label.endsWith('M'), 'the first movement phase was resolved');
   if (nBrowsers > 1 && n2 > 0) check(r1.orders.some(o => o.p === 1 && !/ H$| holds/.test(o.text) && o.k !== 0), 'an entered but never submitted sheet became orders at zero');
@@ -241,6 +243,7 @@ async function playGame(mapId) {
   s = await state(host);
   if (s.phase === 0 && s.stage === 1) {
     log('pause, resume, early finish');
+    const serialP2 = s.serial;
     check(Math.abs(s.secondsLeft - 30) < 4, 'second movement phase gets the second schedule entry (30 s): ' + s.secondsLeft);
     await host.page.click('#hPause'); await waitFor(host, () => S.stage === 2);
     const a = (await state(host)).secondsLeft; await sleep(3000); const b = (await state(host)).secondsLeft;
@@ -257,7 +260,7 @@ async function playGame(mapId) {
     await waitFor(host, () => S.stage !== 1, null, 30000);
     const after = await state(host);
     check(after.stage !== 1 && after.closeReason === 1, `everyone submitted: the phase ended early (reason ${after.closeReason}, ${left}s were left)`);
-    s = await nextPhase(host, 180000);
+    s = await nextPhase(host, 180000, serialP2);
   }
 
   // ---- a player drops and comes back
@@ -269,9 +272,10 @@ async function playGame(mapId) {
     await gone.ctx.close();
     await waitFor(host, seat => !S.seats[seat].present, gone.seat, (AWAY + 10) * 1000);
     check(true, 'a player who left is shown as away');
+    const beforeDrop = s.serial;
     for (const p of players.filter(x => x !== gone)) { await randomSheet(p); if ((await state(p)).my && (await state(p)).my.needs) await toggleSubmit(p, true); }
     if (cheat) await sealHonest(gid, cheat);
-    s = await nextPhase(host, 180000);
+    s = await nextPhase(host, 180000, beforeDrop);
     const res = await lastResults(host);
     if (res.label.endsWith('M') && res.orders.some(o => o.p === gone.seat)) {
       check(res.orders.filter(o => o.p === gone.seat).every(o => o.k === 0), 'away player: every unit held');
@@ -341,9 +345,10 @@ async function playGame(mapId) {
     if (s.stage === 2) { await H.page.click('#hResume').catch(() => { }); await sleep(500); continue; }
     if (s.stage !== 1) { await sleep(500); continue; }
     seen.add(s.label.slice(-1));
+    const before = s.serial;
     for (const p of players) { const st = await state(p); if (st.my && st.my.needs && !st.my.submitted) { await randomSheet(p); if (Math.random() < 0.8) await toggleSubmit(p, true); } }
     if (cheat) await sealHonest(gid, cheat);
-    await nextPhase(H, 90000);
+    await nextPhase(H, 90000, before);
   }
   log('phase types played in random play: ' + [...seen].join(''));
 

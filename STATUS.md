@@ -52,9 +52,10 @@ secrecy of everything the server sends and stores; the host dropping (host role 
 on); roll-back; resume from a game code; the server losing the game and a browser
 resuming it from its own copy; random play through retreats and builds.
 
-Results: **classic board and Ring of 5 pass every check** (138 checks in the last full
-run). Modern and Ancient Mediterranean have each passed in full in some runs and timed
-out at one step in others (see "Known issue" below).
+Results: **classic board, Modern, Ancient Mediterranean and Ring of 5 pass every check**
+(152 checks in the last full run, about 20 minutes). An earlier intermittent timeout on
+the 10-power maps was a race in the test itself (it sometimes started waiting after the
+phase had already ended), now fixed. Timeouts print the page's state if one ever recurs.
 
 ## Decisions you made this session (recorded in DECISIONS.md)
 
@@ -69,18 +70,13 @@ maps only (§12).
 - [x] Classic map data and art, default in the web client, README steps, THIRD_PARTY.md.
 - [x] Turn flow and tamper-proof orders (engine and web client).
 - [x] VR design notes: `docs/vr-world-design.md`.
-- [x] Automated playtesting through the web client (`web/e2e/playtest.js`). Known issue below.
+- [x] Automated playtesting through the web client (`web/e2e/playtest.js`).
 - [x] Variant research (`docs/variants-research.md`); jDip importer (10 variants with pictures).
 - [x] Cross-checks against the Python engine and godip, all phase types.
 - [x] Dockerfile built and run.
 
 Left for next time:
 
-- [ ] **Known issue: intermittent playtest timeout on 10-power maps.** On Modern (and once
-      Ancient Mediterranean) the step after a player drops sometimes waits longer than the
-      test allows. Timeouts now print the page state (stage, seats, who has submitted);
-      run `node web/e2e/playtest.js modern` a few times and read that line. Unknown yet
-      whether it is a real stall or only slow timing with many powers.
 - [ ] 1900: fetch DPjudge's `1900.map` at setup (GitHub was unreachable here) and check
       what its special rule needs.
 - [ ] godip variants (Cold War, Western World 901, Youngstown Redux, ...): a Go exporter
