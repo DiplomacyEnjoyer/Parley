@@ -37,3 +37,65 @@ public class ArtTests
         foreach (var xy in art.Units.Values) { Assert.InRange(xy[0], 0, art.Width); Assert.InRange(xy[1], 0, art.Height); }
     }
 }
+
+/// <summary>The jDip importer, checked against the DPjudge importer on the one map both formats describe.</summary>
+public class JdipTests
+{
+    private static string Pack(string name) => Path.Combine(Game.RepoRoot(), "third_party", "jdip", name);
+
+    [Fact]
+    public void JdipStandardIsTheSameBoardAsDpjudgeStandard()
+    {
+        Assert.True(File.Exists(Pack("stdVariants.zip")), "run scripts/fetch-reference-maps.sh first");
+        var j = JdipImporter.Import(Pack("stdVariants.zip"), "Standard", "standard");
+        var d = DpjudgeImporter.Import(Path.Combine(Game.RepoRoot(), "third_party", "maps", "dpjudge", "standard.map"));
+        var a = new MapData(); Assert.True(a.Load(j.Pmap), a.error);
+        var b = new MapData(); Assert.True(b.Load(d.Pmap), b.error);
+        Assert.Equal(b.provCount, a.provCount); Assert.Equal(b.locCount, a.locCount);
+        Assert.Equal(b.scCount, a.scCount); Assert.Equal(b.startUnitCount, a.startUnitCount);
+        for (int p = 0; p < a.provCount; p++)
+        {
+            int q = b.FindProv(a.provId[p]);
+            Assert.True(q >= 0, a.provId[p]);
+            Assert.Equal(b.provType[q], a.provType[p]);
+            Assert.Equal(b.provSc[q], a.provSc[p]);
+            for (int r = 0; r < a.provCount; r++)
+            {
+                int s = b.FindProv(a.provId[r]);
+                Assert.True(b.ArmyAdjacent(q, s) == a.ArmyAdjacent(p, r), "army " + a.provId[p] + "-" + a.provId[r]);
+            }
+        }
+        for (int l = 0; l < a.locCount; l++)
+            for (int m = 0; m < a.locCount; m++)
+                Assert.True(b.FleetAdjacent(b.FindLoc(a.locId[l]), b.FindLoc(a.locId[m])) == a.FleetAdjacent(l, m), "fleet " + a.locId[l] + "-" + a.locId[m]);
+    }
+
+    [Theory]
+    [InlineData("hundredVariants.zip", "Hundred3 v2 [H32]")]
+    [InlineData("youngstownVariants.zip", "Youngstown")]
+    [InlineData("sailhoVariants.zip", "Sail Ho!")]
+    [InlineData("stdVariants.zip", "1898")]
+    [InlineData("stdVariants.zip", "Fleet Rome")]
+    [InlineData("milanVariants.zip", "Milan")]
+    [InlineData("asiaVariants.zip", "Asia")]
+    [InlineData("loeb9Variants.zip", "Loeb9")]
+    [InlineData("rootzVariants.zip", "Root Z")]
+    public void JdipVariantConvertsWithItsPictureAndPlays(string pack, string variant)
+    {
+        Assert.True(File.Exists(Pack(pack)), "run scripts/fetch-reference-maps.sh first");
+        var res = JdipImporter.Import(Pack(pack), variant, "v");
+        var map = new MapData(); Assert.True(map.Load(res.Pmap), map.error);
+        string svg = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(svg, res.Svg);
+            var warnings = new List<string>();
+            var art = SvgArt.Convert(svg, map, res.Aliases, warnings);
+            Assert.Equal(map.provCount, art.Provs.Count);
+        }
+        finally { File.Delete(svg); }
+        var report = Simulator.Run(res.Pmap, 3, 5, 8, "basic");   // checks every phase; throws on any broken invariant
+        Assert.True(report.Problems.Count == 0, string.Join("\n", report.Problems));
+        Assert.Equal(3, report.Games);
+    }
+}

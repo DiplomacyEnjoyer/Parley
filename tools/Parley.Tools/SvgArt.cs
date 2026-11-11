@@ -90,7 +90,11 @@ public static class SvgArt
 
     public static Art Convert(string svgPath, MapData map, Dictionary<string, List<string>> aliases, List<string> warnings)
     {
-        var doc = XDocument.Load(svgPath, LoadOptions.None);
+        // jDip files declare their namespace in an internal DTD, so the DTD is read, but nothing
+        // outside the file is ever fetched and entity expansion is capped
+        var settings = new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Parse, XmlResolver = null, MaxCharactersFromEntities = 100000 };
+        XDocument doc;
+        using (var reader = System.Xml.XmlReader.Create(svgPath, settings)) doc = XDocument.Load(reader);
         XNamespace svg = "http://www.w3.org/2000/svg";
         var root = doc.Root ?? throw new InvalidDataException("empty SVG");
         var art = new Art { Source = Path.GetFileName(svgPath) };
@@ -159,11 +163,16 @@ public static class SvgArt
         }
         foreach (var (id, markup) in coastShapes) if (!art.Provs.ContainsKey(id)) art.Provs[id] = markup;
 
-        XNamespace jd = root.GetNamespaceOfPrefix("jdipNS") ?? "svg.dtd";
-        foreach (var p in root.Descendants(jd + "PROVINCE"))
+        foreach (var p in root.Descendants().Where(e => e.Name.LocalName == "PROVINCE" && e.Name.Namespace != svg))
         {
             string id = Resolve((string)p.Attribute("name"));
-            var u = p.Element(jd + "UNIT");
+            var scm = p.Elements().FirstOrDefault(e => e.Name.LocalName == "SUPPLY_CENTER");
+            if (id != null && scm != null && !id.Contains('/'))
+            {
+                string sx = Num((string)scm.Attribute("x") ?? ""), sy = Num((string)scm.Attribute("y") ?? "");
+                if (sx != null && sy != null) art.Centres[id] = new[] { double.Parse(sx, CultureInfo.InvariantCulture), double.Parse(sy, CultureInfo.InvariantCulture) };
+            }
+            var u = p.Elements().FirstOrDefault(e => e.Name.LocalName == "UNIT");
             if (id == null || u == null) continue;
             string x = Num((string)u.Attribute("x") ?? ""), y = Num((string)u.Attribute("y") ?? "");
             if (x == null || y == null) continue;

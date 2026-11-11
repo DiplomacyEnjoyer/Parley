@@ -13,6 +13,8 @@ static int Usage()
                                                 convert a DPjudge-format map
           parley import-svg <map.pmap> <board.svg> <out.art.json> [dpjudge.map]
                                                 match a jDip-style board picture to a map (for the web client)
+          parley import-jdip <pack.zip> [variant] [out.pmap] [id]
+                                                convert a jDip variant (no variant: list them); writes out.art.json too
           parley check-map <file.pmap>          load a map and print a summary
           parley sim <file.pmap> [games] [seed] [maxYears] [basic|random]
                                                 play bot games; checks + per-power statistics
@@ -63,6 +65,35 @@ switch (args[0])
             foreach (var w in warnings) Console.WriteLine("warning: " + w);
             SvgArt.Write(art, args[3]);
             Console.WriteLine($"wrote {args[3]}: {art.Provs.Count} province shapes, {art.Units.Count} unit positions, {art.Centres.Count} centre markers");
+            return 0;
+        }
+    case "import-jdip":
+        {
+            if (args.Length < 2) return Usage();
+            if (args.Length < 4) { foreach (var n in JdipImporter.List(args[1])) Console.WriteLine(n); return 0; }
+            string id = args.Length > 4 ? args[4] : Path.GetFileNameWithoutExtension(args[3]);
+            var res = JdipImporter.Import(args[1], args[2], id);
+            foreach (var w in res.Warnings) Console.WriteLine("warning: " + w);
+            var map = new Parley.Engine.MapData();
+            if (!map.Load(res.Pmap)) { Console.WriteLine("converted map does not load: " + map.error); File.WriteAllText(args[3] + ".failed", res.Pmap); return 1; }
+            File.WriteAllText(args[3], res.Pmap);
+            Console.WriteLine($"wrote {args[3]}: {map.provCount} provinces, {map.scCount} centres, {map.powerCount} powers");
+            if (res.Svg != "")
+            {
+                string tmp = Path.GetTempFileName();
+                File.WriteAllText(tmp, res.Svg);
+                var warnings = new List<string>();
+                try
+                {
+                    var art = SvgArt.Convert(tmp, map, res.Aliases, warnings);
+                    string artFile = Path.ChangeExtension(args[3], ".art.json");
+                    SvgArt.Write(art, artFile);
+                    foreach (var w in warnings) Console.WriteLine("art warning: " + w);
+                    Console.WriteLine($"wrote {artFile}: {art.Provs.Count} province shapes");
+                }
+                catch (Exception ex) { Console.WriteLine("no picture: " + ex.Message); }
+                finally { File.Delete(tmp); }
+            }
             return 0;
         }
     case "check-map":

@@ -53,7 +53,7 @@ public static class DpjudgeImporter
         public List<string> Warnings = new();
     }
 
-    private static readonly string[] Palette =
+    internal static readonly string[] Palette =
     {
         "#c8553d", "#2f6690", "#3a7d44", "#8d6a9f", "#d9a441", "#5f6c7b", "#b56576", "#4c9f9a", "#7f5539",
         "#6a994e", "#bc4749", "#577590", "#f3722c", "#43aa8b", "#9d4edd", "#90be6d", "#277da1", "#f94144",
@@ -212,7 +212,7 @@ public static class DpjudgeImporter
         }
     }
 
-    private static string TitleCase(string s)
+    internal static string TitleCase(string s)
     {
         var sb = new StringBuilder();
         bool start = true;
