@@ -27,7 +27,7 @@
 | Game flow (seats, hand-in, lock-in, timer, pause, drop/rejoin, draw, resume, roll-back) | Done | 9 scenario tests |
 | Bot simulation with per-phase checks | Done | Thousands of games, 2 to 34 players, original and imported maps; no failures |
 | UdonSharp-subset guard | Done | Test reads the engine source and rejects anything outside the subset |
-| Web client | See "Web client" below | |
+| Web client (flat map, tap order entry, secret orders, history, roll-back, save/resume) | Working; not yet played by humans | Automated three-browser play-through; see `web/README.md` |
 
 Test count: see the last line of `dotnet test`.
 

@@ -5,3 +5,5 @@ third_party/*
 *.user
 .vs/
 out/
+web/data/
+maps-local/

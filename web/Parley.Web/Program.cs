@@ -1,0 +1,258 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Parley web client: a small server that runs the same rules engine as the VR world
+// and a single web page with a flat map and tap-style order entry. Meant for playing a
+// real game with friends over Discord before the VR world exists.
+using System.Security.Cryptography;
+using System.Text.Json;
+using Parley.Engine;
+using Parley.Tools;
+using Parley.Web;
+
+string root = Game.RepoRoot();
+// the page lives next to the program when published, or in the source tree when run with "dotnet run"
+string webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+if (!Directory.Exists(webRoot)) webRoot = Path.Combine(root, "web", "Parley.Web", "wwwroot");
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = webRoot });
+builder.Logging.SetMinimumLevel(LogLevel.Warning);
+var app = builder.Build();
+
+string dataDir = Environment.GetEnvironmentVariable("PARLEY_DATA") ?? Path.Combine(root, "web", "data");
+var lobby = new Lobby(new[] { Path.Combine(root, "maps"), Path.Combine(root, "maps-local") }, dataDir);
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+IResult Fail(string message) => Results.Json(new { error = message }, statusCode: 400);
+
+app.MapGet("/api/maps", () => lobby.Maps.Values.OrderBy(m => m.Map.powerCount).ThenBy(m => m.Map.mapName).Select(m => new
+{
+    id = m.Map.mapId, name = m.Map.mapName, powers = m.Map.powerCount, provinces = m.Map.provCount, centres = m.Map.scCount,
+    credit = m.Map.credit
+}));
+
+app.MapGet("/api/games", () => lobby.Games.Values.OrderByDescending(g => g.Created).Take(50).Select(g =>
+{
+    lock (g) return new { id = g.Id, title = g.Title, map = g.G.Map.mapName, phase = g.G.Flow.stage == GameFlow.STAGE_LOBBY ? "lobby" : g.G.State.PhaseLabel(), seats = g.G.Flow.SeatedCount(), powers = g.G.Map.powerCount };
+}));
+
+app.MapPost("/api/games", (CreateRequest req) =>
+{
+    if (req.MapId == null || !lobby.Maps.TryGetValue(req.MapId, out var m)) return Fail("unknown map");
+    var wg = lobby.Create(m, string.IsNullOrWhiteSpace(req.Title) ? m.Map.mapName : req.Title.Trim());
+    wg.G.Flow.SetTimers(req.MoveSeconds, req.RetreatSeconds, req.AdjustSeconds);
+    wg.G.Flow.waitForAbsent = req.WaitForEveryone;
+    lobby.Save(wg);
+    return Results.Json(new { id = wg.Id });
+});
+
+app.MapPost("/api/games/import", (ImportRequest req) =>
+{
+    string text = (req.Text ?? "").Trim();
+    if (text.Length == 0) return Fail("paste a game code or a game archive");
+    bool isArchive = text.StartsWith(GameHistory.MAGIC + ";");
+    var probe = lobby.Maps.Values.FirstOrDefault();
+    if (probe == null) return Fail("no maps installed");
+    string need = isArchive ? new GameHistory().PeekMap(text) : PeekCode(text);
+    if (need == "") return Fail("that is neither a game code nor a game archive");
+    string mapId = need.Split('.')[0];
+    if (!lobby.Maps.TryGetValue(mapId, out var m)) return Fail("this save is for the map '" + mapId + "', which is not installed on this server");
+    var wg = lobby.Create(m, m.Map.mapName + " (resumed)");
+    bool ok = isArchive ? wg.G.Flow.LoadArchive(text, lobby.Now) : wg.G.Flow.LoadCode(text, lobby.Now);
+    if (!ok) { string err = wg.G.Flow.error; lobby.Remove(wg); return Fail(err); }
+    wg.G.Flow.waitForAbsent = true;
+    lobby.Save(wg);
+    return Results.Json(new { id = wg.Id });
+});
+
+static string PeekCode(string code)
+{
+    var p = code.Split('.');
+    return p.Length >= 4 && p[0] == GameCodec.MAGIC ? p[1] + "." + p[2] : "";
+}
+
+app.MapGet("/api/games/{id}/map", (string id) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    return Results.Json(wg.Info.Json);
+});
+
+app.MapPost("/api/games/{id}/join", (string id, JoinRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    string name = (req.Name ?? "").Trim();
+    if (name.Length == 0 || name.Length > 24) return Fail("enter a name (up to 24 characters)");
+    lock (wg)
+    {
+        // a seat is tied to a name; reusing the name of somebody who is in the game needs their link
+        if (wg.Players.Values.Any(p => p.Name == name)) return Fail("that name is already in this game. If it is you, use the personal link you were given (or ask the host to free the seat).");
+        string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+        wg.Players[token] = new Player { Name = name, LastSeen = lobby.Now };
+        if (wg.HostToken == null) wg.HostToken = token;
+        lobby.Save(wg);
+        return Results.Json(new { token });
+    }
+});
+
+app.MapGet("/api/games/{id}/state", (string id, string token) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        wg.Players.TryGetValue(token ?? "", out var me);
+        if (me != null) { me.LastSeen = lobby.Now; }
+        lobby.Tick(wg);
+        return Results.Json(Views.State(wg, me, token, lobby.Now));
+    }
+});
+
+app.MapPost("/api/games/{id}/seat", (string id, SeatRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
+        var f = wg.G.Flow;
+        if (req.Power < 0) { int cur = f.SeatOf(me.Name); if (cur >= 0 && f.stage == GameFlow.STAGE_LOBBY) f.ReleaseSeat(cur); }
+        else if (!f.ClaimSeat(req.Power, me.Name)) return Fail(f.error);
+        lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+app.MapPost("/api/games/{id}/orders", (string id, OrdersRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
+        var g = wg.G; var f = g.Flow;
+        int power = f.SeatOf(me.Name);
+        if (power < 0) return Fail("you do not play a power in this game");
+        if (req.Serial != f.phaseSerial) return Fail("the phase has changed; your screen was out of date");
+        if (f.locked[power] && req.Orders != null) f.SetLocked(power, false);
+        if (req.Orders != null)
+        {
+            var pad = new Adjudicator(); pad.Init(g.Map);
+            var s = g.State; var map = g.Map;
+            foreach (var o in req.Orders)
+            {
+                if (s.phase == BoardState.PHASE_MOVE)
+                {
+                    if (o.U < 0 || o.U >= map.locCount) continue;
+                    int u = s.provUnit[map.locProv[o.U]];
+                    if (u < 0 || s.unitPower[u] != power) continue;
+                    switch (o.K)
+                    {
+                        case "m": pad.SetMove(u, o.A, o.Via); break;
+                        case "s": pad.SetSupportHold(u, o.A); break;
+                        case "t": pad.SetSupportMove(u, o.A, o.B); break;
+                        case "c": pad.SetConvoy(u, o.A, o.B); break;
+                    }
+                }
+                else if (s.phase == BoardState.PHASE_RETREAT)
+                {
+                    for (int d = 0; d < s.disCount; d++)
+                        if (s.disLoc[d] == o.U && s.disPower[d] == power && o.K == "r") pad.SetRetreat(d, o.A);
+                }
+                else if (s.phase == BoardState.PHASE_ADJUST)
+                {
+                    switch (o.K)
+                    {
+                        case "ba": pad.AddAdjust(power, Adjudicator.ADJ_BUILD_ARMY, o.A); break;
+                        case "bf": pad.AddAdjust(power, Adjudicator.ADJ_BUILD_FLEET, o.A); break;
+                        case "d": pad.AddAdjust(power, Adjudicator.ADJ_DISBAND, o.A); break;
+                    }
+                }
+            }
+            if (!f.Submit(power, g.Codec.EncodeOrders(s, pad, power))) return Fail(f.error);
+        }
+        if (req.Lock.HasValue) f.SetLocked(power, req.Lock.Value);
+        lobby.Tick(wg);
+        lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+app.MapPost("/api/games/{id}/draw", (string id, DrawRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (!wg.Players.TryGetValue(req.Token ?? "", out var me)) return Fail("join the game first");
+        int power = wg.G.Flow.SeatOf(me.Name);
+        if (power < 0) return Fail("you do not play a power in this game");
+        wg.G.Flow.VoteDraw(power, req.Value);
+        lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+app.MapPost("/api/games/{id}/host", (string id, HostRequest req) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        if (req.Token == null || req.Token != wg.HostToken) return Fail("only the host can do that");
+        var f = wg.G.Flow; float now = lobby.Now;
+        switch (req.Action)
+        {
+            case "start": if (!f.StartGame(now)) return Fail(f.error); break;
+            case "pause": f.Pause(now); break;
+            case "resume": f.Resume(now); break;
+            case "resolve": f.ResolveNow(now); break;
+            case "rollback": if (!f.RollBack(req.Index, now)) return Fail(f.error); break;
+            case "timers": f.SetTimers(req.MoveSeconds, req.RetreatSeconds, req.AdjustSeconds); break;
+            case "wait": f.waitForAbsent = req.Value; break;
+            case "free":
+                if (req.Index >= 0 && req.Index < wg.G.Map.powerCount)
+                {
+                    string holder = wg.G.History.seatName[req.Index];
+                    f.ReleaseSeat(req.Index);
+                    // their personal link stops working, so the seat can really be handed on
+                    foreach (var k in wg.Players.Where(p => p.Value.Name == holder && p.Key != wg.HostToken).Select(p => p.Key).ToList()) wg.Players.Remove(k);
+                }
+                break;
+            default: return Fail("unknown action");
+        }
+        lobby.Save(wg);
+        return Results.Json(new { ok = true });
+    }
+});
+
+app.MapGet("/api/games/{id}/history/{index:int}", (string id, int index) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg)
+    {
+        var v = Views.HistoryEntry(wg, index);
+        return v == null ? Results.NotFound() : Results.Json(v);
+    }
+});
+
+app.MapGet("/api/games/{id}/archive", (string id) =>
+{
+    if (!lobby.Games.TryGetValue(id, out var wg)) return Results.NotFound();
+    lock (wg) return Results.Text(wg.G.History.count == 0 ? "" : wg.G.Flow.Archive());
+});
+
+// the clock: resolve phases whose time has run out even if nobody is looking
+var timer = new System.Threading.Timer(_ =>
+{
+    foreach (var wg in lobby.Games.Values) { try { lock (wg) lobby.Tick(wg); } catch { /* keep the clock alive */ } }
+}, null, 1000, 1000);
+
+string url = Environment.GetEnvironmentVariable("PARLEY_URL") ?? "http://0.0.0.0:5080";
+Console.WriteLine($"Parley web client: {lobby.Maps.Count} maps, {lobby.Games.Count} saved games. Listening on {url}");
+app.Run(url);
+
+public record CreateRequest(string MapId, string Title, int MoveSeconds, int RetreatSeconds, int AdjustSeconds, bool WaitForEveryone);
+public record ImportRequest(string Text);
+public record JoinRequest(string Name);
+public record SeatRequest(string Token, int Power);
+public record OrderItem(string K, int U, int A, int B, bool Via);
+public record OrdersRequest(string Token, int Serial, List<OrderItem> Orders, bool? Lock);
+public record DrawRequest(string Token, bool Value);
+public record HostRequest(string Token, string Action, int Index, int MoveSeconds, int RetreatSeconds, int AdjustSeconds, bool Value);

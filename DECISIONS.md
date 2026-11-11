@@ -344,9 +344,26 @@ Things to be aware of (not legal advice):
 5. **The name of the original game** appears in this repository only to describe rule
    compatibility and the test suite. Keep it out of the world's name, thumbnail and tags.
 
-## 15. Web client
+## 15. Web client: a small server running the real engine
 
-See decision 17 once built; until then STATUS.md says where it stands.
+For playing over Discord before VR exists. Details and instructions: `web/README.md`.
+
+- **A server, not a static page.** Secret orders need somewhere neutral to sit until
+  everyone has locked in. A small .NET server uses the engine directly, so the web game
+  and the future VR game run identical rules code. *Alternative:* compile the engine to
+  run inside the browser and pass codes around by hand; rejected because someone would
+  have to collect everyone's secret orders manually each turn.
+- **Order entry copies the VR tap sequence** (unit, order type, target; only legal
+  options offered). So playing here also tests the option generator the VR panel will use.
+- **The host is trusted.** Players never receive each other's orders before a phase
+  resolves, but whoever runs the server could read the saved files. Fine among friends.
+- **Hosting is on you.** Run it on your PC and share it through a free tunnel, or use
+  the Dockerfile on any small server. The Dockerfile is written but untested.
+- **Imported maps have no pictures.** They are drawn as dots and lines by an automatic
+  layout. Good enough to test a variant's rules and balance; not pretty.
+- Tested with an automated three-browser play-through (join, take seats, enter orders
+  by clicking, lock in, resolve, view history, reload, resume from a code). Not yet
+  played by humans.
 
 ## 16. No remote repository
 
