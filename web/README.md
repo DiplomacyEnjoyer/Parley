@@ -33,7 +33,9 @@ It prints an address ending in `trycloudflare.com`; send friends that address pl
 
 ## Running it on a server
 
-A `Dockerfile` is in the project root (see STATUS.md for whether it has been built):
+A `Dockerfile` is in the project root (built and tested in the second session). Run
+`./scripts/fetch-reference-maps.sh` first if you want the classic board in the image;
+the image then contains third-party maps, so keep it to yourself (THIRD_PARTY.md).
 
 ```bash
 docker build -t parley .
