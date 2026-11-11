@@ -118,3 +118,10 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Parley keeps its own (non-Unity) project files in git
+!Parley.sln
+!engine/**/*.csproj
+!tools/**/*.csproj
+!tests/**/*.csproj
+!web/**/*.csproj
