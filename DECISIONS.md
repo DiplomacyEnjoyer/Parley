@@ -188,6 +188,24 @@ Result: **all 164 DATC v3.0 test cases pass** (165 checks: one case describes tw
 situations). The DATC's own licence allows its chapter 6 test cases to be copied, so
 they are in `tests/datc/`.
 
+**Second opinion.** Passing a test suite I encoded myself is not proof, so I also
+compared the engine with an independent one: 20,000 random situations on the classic
+reference board (positions from bot games; half sensible orders, half wild) were
+resolved by both Parley and the open-source Python `diplomacy` package, run as a
+separate program. **19,988 gave identical results. The other 12 are all one known
+difference between rulebook editions**: when an army is sent to a neighbouring province
+and its own power also orders a fleet to convoy it, Parley (following DATC 3.0 and the
+2023 rulebook wording) uses the convoy and the army stays put if the convoy fails; the
+other engine follows the older preference and lets it walk instead. No other
+disagreement was found. Re-run with `parley crosscheck-export` and
+`scripts/crosscheck.py`.
+
+**YOUR CALL (small):** that "no walking fallback" rule can surprise players. In VR the
+panel makes the choice explicit (move over land / move by convoy), so it should rarely
+bite. If you would rather have the older, more forgiving behaviour, it is a few lines
+in `Adjudicator.PrepareOrders`, at the cost of four DATC cases (6.G.8, 6.G.11, 6.G.20
+and the like) changing to their "version 2" answers.
+
 ## 8. Saves: where the game lives, and how it gets in and out of a VRChat world
 
 What VRChat offers today (from search results; to be re-checked in the Unity phase):

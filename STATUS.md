@@ -20,7 +20,7 @@
 | Piece | State | How it is tested |
 |---|---|---|
 | Map format, any map / any player count | Done | Loads 11 original maps and 14 imported community maps; 2 to 70 powers |
-| Rules engine (moves, supports, convoys and paradoxes, retreats, builds, forced disbands, ownership, victory, draw) | Done | **DATC v3.0: all 164 cases pass** (165 checks) |
+| Rules engine (moves, supports, convoys and paradoxes, retreats, builds, forced disbands, ownership, victory, draw) | Done | **DATC v3.0: all 164 cases pass** (165 checks). Cross-checked against an independent engine on 20,000 random situations: identical except one documented rule-edition difference (DECISIONS §7) |
 | Map importer (DPjudge `.map` format) | Done | All 14 reference maps convert, load and play |
 | Game codes and full-history archive | Done | Round-trip, damage detection, wrong-map detection, size budget |
 | Legal-option generation for the tap panel | Done | "Options offered = orders the referee accepts", checked on thousands of orders across 4 maps |
@@ -56,15 +56,17 @@ Test count: see the last line of `dotnet test`.
 5. Contributor terms so other people's contributions can be uploaded to VRChat (§14).
 6. Map design: keep the generated Ring maps as the launch maps, or draw an original
    map by hand (§12).
+7. Keep the strict "an army ordered to convoy next door does not walk if the convoy
+   fails" rule, or use the older forgiving one (§7).
 
 ## Next steps
 
 Still in the "no Unity needed" phase:
 
 - [ ] Second importer: jDip XML (many classic-era variants). Then webDiplomacy/vDiplomacy.
-- [ ] Cross-check the adjudicator against a second, independent engine on random
-      positions (the Python `diplomacy` package can be scripted for this; keep it a
-      separate process, it is AGPL).
+- [ ] Extend the cross-check (`scripts/crosscheck.py`) to retreat and build phases;
+      so far it covers movement phases only.
+- [ ] Try the Dockerfile (written, never built).
 - [ ] Human playtest of the web client; fix what friends trip over.
 - [ ] A stronger bot (convoys, defence) so balance numbers mean more.
 

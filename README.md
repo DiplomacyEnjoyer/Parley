@@ -62,6 +62,12 @@ Convert a community map from DPjudge format (check its licence before sharing it
 dotnet run --project tools/Parley.Tools -- import-dpjudge third_party/maps/dpjudge/modern.map modern.pmap
 ```
 
+Start the web client (then open http://localhost:5080; see [web/README.md](web/README.md)):
+
+```bash
+dotnet run --project web/Parley.Web
+```
+
 ## The engine in one paragraph
 
 `MapData` loads a `.pmap` file. `BoardState` is the position. `Adjudicator` takes orders

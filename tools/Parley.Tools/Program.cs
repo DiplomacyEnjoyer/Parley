@@ -14,6 +14,8 @@ static int Usage()
           parley check-map <file.pmap>          load a map and print a summary
           parley sim <file.pmap> [games] [seed] [maxYears] [basic|random]
                                                 play bot games; checks + per-power statistics
+          parley crosscheck-export <file.pmap> [count] [seed]
+                                                write random situations + verdicts as JSON lines
           parley gen-ring <players> [isthmus] [out.pmap]
                                                 generate an original Ring map
         """);
@@ -66,6 +68,12 @@ switch (args[0])
             var rep = Simulator.Run(File.ReadAllText(args[1]), games, seed, years, kind, true, Console.WriteLine);
             Console.Write(Simulator.Format(rep));
             return rep.Problems.Count == 0 ? 0 : 1;
+        }
+    case "crosscheck-export":
+        {
+            if (args.Length < 2) return Usage();
+            CrossCheck.Export(File.ReadAllText(args[1]), args.Length > 2 ? int.Parse(args[2]) : 1000, args.Length > 3 ? int.Parse(args[3]) : 1, Console.Out);
+            return 0;
         }
     case "gen-ring":
         {
