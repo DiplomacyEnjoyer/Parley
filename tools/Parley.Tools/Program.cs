@@ -12,6 +12,8 @@ static int Usage()
           parley import-dpjudge <in.map> <out.pmap> [id] [name...]
                                                 convert a DPjudge-format map
           parley check-map <file.pmap>          load a map and print a summary
+          parley sim <file.pmap> [games] [seed] [maxYears] [basic|random]
+                                                play bot games; checks + per-power statistics
           parley gen-ring <players> [isthmus] [out.pmap]
                                                 generate an original Ring map
         """);
@@ -53,6 +55,17 @@ switch (args[0])
             if (!map.Load(File.ReadAllText(args[1]))) { Console.WriteLine("error: " + map.error); return 1; }
             Console.WriteLine($"{map.mapName} [{map.mapId}#{map.hash}]: {map.provCount} provinces, {map.locCount - map.provCount} extra coasts, {map.scCount} centres (victory {map.victoryCenters}), {map.powerCount} powers, {map.startUnitCount} starting units");
             return 0;
+        }
+    case "sim":
+        {
+            if (args.Length < 2) return Usage();
+            int games = args.Length > 2 ? int.Parse(args[2]) : 100;
+            int seed = args.Length > 3 ? int.Parse(args[3]) : 1;
+            int years = args.Length > 4 ? int.Parse(args[4]) : 40;
+            string kind = args.Length > 5 ? args[5] : "basic";
+            var rep = Simulator.Run(File.ReadAllText(args[1]), games, seed, years, kind, true, Console.WriteLine);
+            Console.Write(Simulator.Format(rep));
+            return rep.Problems.Count == 0 ? 0 : 1;
         }
     case "gen-ring":
         {

@@ -63,7 +63,10 @@ public static class RingMapGenerator
         int n = players;
         double total = n * W;
         var cells = new List<Cell>();
-        (string stem, string code) Stem(int i) => i < Stems.Length ? Stems[i] : ("Realm" + (i + 1), "x" + (char)('a' + (i - Stems.Length) % 26));
+        if (n > Stems.Length + 260) throw new ArgumentException("ring maps support at most " + (Stems.Length + 260) + " players");
+        // beyond the named realms, ids are a digit and a letter ("0a", "0b", ...), which cannot clash with the names above
+        (string stem, string code) Stem(int i) => i < Stems.Length ? Stems[i]
+            : ("Realm" + (i + 1), "" + (char)('0' + (i - Stems.Length) / 26) + (char)('a' + (i - Stems.Length) % 26));
 
         cells.Add(new Cell { Id = "crn", Name = "The Crown", Type = 'c', Sc = "*", RingLo = 0, RingHi = 0, Full = true, ALo = 0, AHi = total, Realm = -1, Role = "crown" });
         for (int i = 0; i < n; i++)

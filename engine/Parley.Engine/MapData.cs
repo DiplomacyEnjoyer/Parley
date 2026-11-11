@@ -159,7 +159,7 @@ namespace Parley.Engine
                 Tokenize(lines[i]);
                 if (tokCount == 0 || tok[0] != "power") continue;
                 // power <id> <adjective> <color> <name...>
-                if (tokCount < 5) { error = "line " + (i + 1) + ": power needs id, adjective, color, name"; return false; }
+                if (tokCount < 5) { error = "line " + (i + 1).ToString() + ": power needs id, adjective, color, name"; return false; }
                 powerId[pw] = tok[1].ToLower();
                 powerAdjective[pw] = tok[2].Replace('_', ' ');
                 powerColor[pw] = tok[3];
@@ -180,13 +180,13 @@ namespace Parley.Engine
                 if (k == "prov")
                 {
                     // prov <id> <l|c|s> <-|*|powerId> <name...>
-                    if (tokCount < 5) { error = "line " + (i + 1) + ": prov needs id, type, centre, name"; return false; }
+                    if (tokCount < 5) { error = "line " + (i + 1).ToString() + ": prov needs id, type, centre, name"; return false; }
                     provId[pv] = tok[1].ToLower();
                     string t = tok[2];
                     if (t == "l") provType[pv] = LAND;
                     else if (t == "c") provType[pv] = COAST;
                     else if (t == "s") provType[pv] = SEA;
-                    else { error = "line " + (i + 1) + ": province type must be l, c or s"; return false; }
+                    else { error = "line " + (i + 1).ToString() + ": province type must be l, c or s"; return false; }
                     provHome[pv] = -1;
                     startOwner[pv] = -1;
                     provSc[pv] = false;
@@ -194,7 +194,7 @@ namespace Parley.Engine
                     else if (tok[3] != "-")
                     {
                         int hp = FindPower(tok[3]);
-                        if (hp < 0) { error = "line " + (i + 1) + ": unknown power " + tok[3]; return false; }
+                        if (hp < 0) { error = "line " + (i + 1).ToString() + ": unknown power " + tok[3]; return false; }
                         provSc[pv] = true; provHome[pv] = hp; startOwner[pv] = hp;
                     }
                     provName[pv] = JoinFrom(4);
@@ -224,10 +224,10 @@ namespace Parley.Engine
             {
                 Tokenize(lines[i]);
                 if (tokCount == 0 || tok[0] != "coast") continue;
-                if (tokCount < 3) { error = "line " + (i + 1) + ": coast needs province and coast id"; return false; }
+                if (tokCount < 3) { error = "line " + (i + 1).ToString() + ": coast needs province and coast id"; return false; }
                 int cp = FindProv(tok[1]);
-                if (cp < 0) { error = "line " + (i + 1) + ": unknown province " + tok[1]; return false; }
-                if (provType[cp] != COAST) { error = "line " + (i + 1) + ": only coastal provinces can have named coasts"; return false; }
+                if (cp < 0) { error = "line " + (i + 1).ToString() + ": unknown province " + tok[1]; return false; }
+                if (provType[cp] != COAST) { error = "line " + (i + 1).ToString() + ": only coastal provinces can have named coasts"; return false; }
                 provCoastCount[cp]++;
             }
             for (int p = 0; p < nProv; p++)
@@ -260,12 +260,12 @@ namespace Parley.Engine
                 {
                     // army <prov>: <prov> <prov> ...   (two-way)
                     int a = FindProv(StripColon(tok[1]));
-                    if (a < 0) { error = "line " + (i + 1) + ": unknown province " + tok[1]; return false; }
+                    if (a < 0) { error = "line " + (i + 1).ToString() + ": unknown province " + tok[1]; return false; }
                     for (int t = 2; t < tokCount; t++)
                     {
                         int b = FindProv(tok[t]);
-                        if (b < 0) { error = "line " + (i + 1) + ": unknown province " + tok[t]; return false; }
-                        if (provType[a] == SEA || provType[b] == SEA) { error = "line " + (i + 1) + ": armies cannot enter sea province"; return false; }
+                        if (b < 0) { error = "line " + (i + 1).ToString() + ": unknown province " + tok[t]; return false; }
+                        if (provType[a] == SEA || provType[b] == SEA) { error = "line " + (i + 1).ToString() + ": armies cannot enter sea province"; return false; }
                         if (a == b) continue;
                         ea[ne] = a; eb[ne] = b; ne++;
                     }
@@ -274,13 +274,13 @@ namespace Parley.Engine
                 {
                     // fleet <loc>: <loc> <loc> ...     (two-way; loc is "prov" or "prov/coast")
                     int a = FindLoc(StripColon(tok[1]));
-                    if (a < 0) { error = "line " + (i + 1) + ": unknown place " + tok[1]; return false; }
-                    if (!FleetCanStand(a)) { error = "line " + (i + 1) + ": a fleet cannot be at " + tok[1] + " (inland, or a coast must be named)"; return false; }
+                    if (a < 0) { error = "line " + (i + 1).ToString() + ": unknown place " + tok[1]; return false; }
+                    if (!FleetCanStand(a)) { error = "line " + (i + 1).ToString() + ": a fleet cannot be at " + tok[1] + " (inland, or a coast must be named)"; return false; }
                     for (int t = 2; t < tokCount; t++)
                     {
                         int b = FindLoc(tok[t]);
-                        if (b < 0) { error = "line " + (i + 1) + ": unknown place " + tok[t]; return false; }
-                        if (!FleetCanStand(b)) { error = "line " + (i + 1) + ": a fleet cannot be at " + tok[t] + " (inland, or a coast must be named)"; return false; }
+                        if (b < 0) { error = "line " + (i + 1).ToString() + ": unknown place " + tok[t]; return false; }
+                        if (!FleetCanStand(b)) { error = "line " + (i + 1).ToString() + ": a fleet cannot be at " + tok[t] + " (inland, or a coast must be named)"; return false; }
                         if (locProv[a] == locProv[b]) continue;
                         fa[nf] = a; fb[nf] = b; nf++;
                     }
@@ -288,13 +288,13 @@ namespace Parley.Engine
                 else if (k == "unit")
                 {
                     // unit <power> <A|F> <loc>
-                    if (tokCount < 4) { error = "line " + (i + 1) + ": unit needs power, type, place"; return false; }
+                    if (tokCount < 4) { error = "line " + (i + 1).ToString() + ": unit needs power, type, place"; return false; }
                     int up = FindPower(tok[1]);
                     int ul = FindLoc(tok[3]);
-                    if (up < 0) { error = "line " + (i + 1) + ": unknown power " + tok[1]; return false; }
-                    if (ul < 0) { error = "line " + (i + 1) + ": unknown place " + tok[3]; return false; }
+                    if (up < 0) { error = "line " + (i + 1).ToString() + ": unknown power " + tok[1]; return false; }
+                    if (ul < 0) { error = "line " + (i + 1).ToString() + ": unknown place " + tok[3]; return false; }
                     int ut = (tok[2] == "F" || tok[2] == "f") ? FLEET : ARMY;
-                    if (!CanStand(ut, ul)) { error = "line " + (i + 1) + ": that unit type cannot be at " + tok[3]; return false; }
+                    if (!CanStand(ut, ul)) { error = "line " + (i + 1).ToString() + ": that unit type cannot be at " + tok[3]; return false; }
                     startUnitPower[startUnitCount] = up; startUnitType[startUnitCount] = ut; startUnitLoc[startUnitCount] = ul;
                     startUnitCount++;
                 }
@@ -303,11 +303,11 @@ namespace Parley.Engine
                     // owner <power|none> <prov> ...    (start ownership that differs from home centres)
                     if (tokCount < 3) continue;
                     int op = tok[1] == "none" ? -1 : FindPower(tok[1]);
-                    if (op < 0 && tok[1] != "none") { error = "line " + (i + 1) + ": unknown power " + tok[1]; return false; }
+                    if (op < 0 && tok[1] != "none") { error = "line " + (i + 1).ToString() + ": unknown power " + tok[1]; return false; }
                     for (int t = 2; t < tokCount; t++)
                     {
                         int b = FindProv(tok[t]);
-                        if (b < 0 || !provSc[b]) { error = "line " + (i + 1) + ": " + tok[t] + " is not a supply centre"; return false; }
+                        if (b < 0 || !provSc[b]) { error = "line " + (i + 1).ToString() + ": " + tok[t] + " is not a supply centre"; return false; }
                         startOwner[b] = op;
                     }
                 }
@@ -315,14 +315,14 @@ namespace Parley.Engine
                 {
                     if (tokCount < 4) continue;
                     int b = FindProv(tok[1]);
-                    if (b < 0) { error = "line " + (i + 1) + ": unknown province " + tok[1]; return false; }
+                    if (b < 0) { error = "line " + (i + 1).ToString() + ": unknown province " + tok[1]; return false; }
                     provX[b] = ParseInt(tok[2], 0); provY[b] = ParseInt(tok[3], 0);
                 }
                 else if (k == "shape")
                 {
                     if (tokCount < 3) continue;
                     int b = FindProv(tok[1]);
-                    if (b < 0) { error = "line " + (i + 1) + ": unknown province " + tok[1]; return false; }
+                    if (b < 0) { error = "line " + (i + 1).ToString() + ": unknown province " + tok[1]; return false; }
                     provShape[b] = JoinFrom(2);
                 }
             }
@@ -378,7 +378,10 @@ namespace Parley.Engine
             scCount = 0;
             for (int p = 0; p < nProv; p++) if (provSc[p]) scCount++;
             if (victoryCenters <= 0) victoryCenters = scCount / 2 + 1;
+            mapId = CleanId(mapId);
             if (mapId == "") mapId = "map";
+            if (locCount > 1900) { error = "map too large (more than 1900 places)"; return false; }
+            if (powerCount > 3000) { error = "too many powers"; return false; }
             if (mapName == "") mapName = mapId;
             for (int p = 0; p < nProv; p++)
             {
@@ -446,6 +449,19 @@ namespace Parley.Engine
             return s;
         }
 
+        // Map ids appear inside game codes, so only lower-case letters and digits are kept.
+        private string CleanId(string s)
+        {
+            string r = "";
+            string low = s.ToLower();
+            for (int i = 0; i < low.Length; i++)
+            {
+                char c = low[i];
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) r += low.Substring(i, 1);
+            }
+            return r;
+        }
+
         private string StripColon(string s)
         {
             if (s.Length > 0 && s[s.Length - 1] == ':') return s.Substring(0, s.Length - 1);
@@ -497,8 +513,8 @@ namespace Parley.Engine
             h2 = (h2 * 29 + startYear % 9973) % M2;
             string digits = HASH_DIGITS;
             string s = "";
-            for (int i = 0; i < 3; i++) { s += digits[h1 % 32]; h1 = h1 / 32; }
-            for (int i = 0; i < 3; i++) { s += digits[h2 % 32]; h2 = h2 / 32; }
+            for (int i = 0; i < 3; i++) { s += digits.Substring(h1 % 32, 1); h1 = h1 / 32; }
+            for (int i = 0; i < 3; i++) { s += digits.Substring(h2 % 32, 1); h2 = h2 / 32; }
             return s;
         }
 

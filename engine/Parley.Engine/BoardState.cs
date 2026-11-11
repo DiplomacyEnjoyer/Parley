@@ -153,7 +153,7 @@ namespace Parley.Engine
         {
             string s = season == SPRING ? "S" : (season == FALL ? "F" : "W");
             string t = phase == PHASE_MOVE ? "M" : (phase == PHASE_RETREAT ? "R" : (phase == PHASE_ADJUST ? "A" : "X"));
-            return s + year + t;
+            return s + year.ToString() + t;
         }
     }
 }

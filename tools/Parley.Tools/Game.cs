@@ -12,6 +12,11 @@ public sealed class Game
     public BoardState State;
     public Adjudicator Adj;
     public Notation Notation;
+    public OptionGenerator Options;
+    public GameCodec Codec;
+    public GameHistory History;
+    public GameFlow Flow;
+    public BoardState Scratch;
 
     public static Game FromPmap(string pmapText, Dictionary<string, List<string>> aliases = null)
     {
@@ -20,6 +25,8 @@ public sealed class Game
         return FromMap(map, aliases);
     }
 
+    public static Game FromFile(string pmapPath) => FromPmap(File.ReadAllText(pmapPath));
+
     public static Game FromMap(MapData map, Dictionary<string, List<string>> aliases = null)
     {
         var g = new Game { Map = map, State = new BoardState(), Adj = new Adjudicator() };
@@ -27,6 +34,11 @@ public sealed class Game
         g.State.SetupStart(map);
         g.Adj.Init(map);
         g.Notation = new Notation(map, aliases);
+        g.Options = new OptionGenerator(); g.Options.Init(map, g.Adj);
+        g.Codec = new GameCodec(); g.Codec.Init(map);
+        g.History = new GameHistory(); g.History.Init(map, g.Codec);
+        g.Scratch = new BoardState(); g.Scratch.Init(map);
+        g.Flow = new GameFlow(); g.Flow.Init(map, g.State, g.Adj, g.Codec, g.History, g.Scratch);
         return g;
     }
 
