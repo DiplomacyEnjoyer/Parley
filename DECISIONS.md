@@ -193,6 +193,36 @@ other engine follows the older preference and lets it walk instead. No other
 disagreement was found. Re-run with `parley crosscheck-export` and
 `scripts/crosscheck.py`.
 
+**Second session: whole games, every phase type, two more engines.** `parley
+crosscheck-games` writes whole bot games (movement, retreats, builds, forced disbands,
+solo victories). Each game is replayed from the start in another engine and the position,
+dislodged units, centres and next phase are compared after every phase.
+
+| Engine | Games | Phases | Movement | Retreats | Builds/disbands |
+|---|---|---|---|---|---|
+| Python `diplomacy` (`scripts/crosscheck_games.py`) | 400 | 14,896 | 8,299 / 8,306 | 2,525 / 2,525 | 3,880 / 4,065 |
+| godip, the Diplicity engine (`tools/crosscheck-godip`) | 400 | 14,928 | 8,315 / 8,323 | 2,526 / 2,526 | 3,895 / 4,079 |
+
+Every difference was examined:
+
+- **Forced disbands** (all build/disband differences): when a power fails to order
+  enough disbands, the rules pick the unit. Parley follows the 2023 rule (farthest from
+  home, fleets first); both other engines use older rules. Unit counts and centres agree;
+  only the choice of unit differs. In the half of the games where every disband is
+  ordered explicitly, builds and disbands match **exactly** in both engines.
+- **Convoy to a neighbouring province** (7 and 8 movement phases): the known
+  rule-edition difference above.
+- **One godip case** (1 phase in 14,928): a head-to-head battle where one move is
+  supported by the owner of the unit it attacks. Parley bounces both units, which is what
+  the DATC's definitions give (section 5: a move's *defend strength* counts all its
+  supports; only the attack on the supporter's own unit leaves that support out; see also
+  DATC 6.E.3 and 6.E.12). godip lets the other unit through. I believe this is a godip
+  deviation, not a Parley bug; the Python engine agrees with Parley.
+
+*jDip as a third adjudicator:* not done. Its engine is Java with no command-line
+adjudication; a harness would need its classes. jDip's *data* is cross-checked instead
+(its Standard board converts to exactly the DPjudge board).
+
 **Owner's decision: keep the newest DATC ruling** (no walking fallback). Background:
 that rule can surprise players. In VR the
 panel makes the choice explicit (move over land / move by convoy), so it should rarely
