@@ -1,0 +1,1852 @@
+# DATC v3.0 chapter 6 test cases, in Parley's test-file format.
+#
+# Source: "DATC - Diplomacy Adjudicator Test Cases" v3.0 by Lucas B. Kruijswijk.
+# The DATC licence says: "The test cases of chapter 6 are allowed to be copied
+# separately without this restriction." The orders below are taken from chapter 6;
+# the EXPECT lines encode the outcome the DATC text describes, using the author's
+# stated preference wherever the DATC offers a choice of rule interpretations.
+#
+# These cases are written for the classic board, which this repository does not
+# contain (see DECISIONS.md). The test runner loads that board's connection data
+# from third_party/ after you run scripts/fetch-reference-maps.sh.
+#
+# Format
+#   CASE <id> <title>
+#   SETUP    extra units ("Power: F Place") and centre ownership ("own Power: a, b")
+#   MOVE     movement orders; units named in orders are placed automatically
+#   RETREAT  retreat orders for the units just dislodged
+#   ADJUST   build / remove orders (board is put in the adjustment phase)
+#   EXPECT   moved: / dislodged:   exact sets, by the province the unit started in
+#            can-retreat: / cannot-retreat:   unit > destination
+#            has: Power A place     units: exact list of every unit on the board
+
+CASE 6.A.1 MOVING TO AN AREA THAT IS NOT A NEIGHBOUR
+MOVE
+  England: F North Sea - Picardy
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.2 MOVE ARMY TO SEA
+MOVE
+  England: A Liverpool - Irish Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.3 MOVE FLEET TO LAND
+MOVE
+  Germany: F Kiel - Munich
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.4 MOVE TO OWN SECTOR
+MOVE
+  Germany: F Kiel - Kiel
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.5 MOVE TO OWN SECTOR WITH CONVOY
+MOVE
+  England: F North Sea Convoys A Yorkshire - Yorkshire
+  England: A Yorkshire - Yorkshire
+  England: A Liverpool Supports A Yorkshire - Yorkshire
+  Germany: F London - Yorkshire
+  Germany: A Wales Supports F London - Yorkshire
+EXPECT
+  moved: lon
+  dislodged: yor
+
+CASE 6.A.6 ORDERING A UNIT OF ANOTHER COUNTRY
+SETUP
+  England: F London
+MOVE
+  Germany: F London - North Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.7 ONLY ARMIES CAN BE CONVOYED
+MOVE
+  England: F London - Belgium
+  England: F North Sea Convoys A London - Belgium
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.8 SUPPORT TO HOLD YOURSELF IS NOT POSSIBLE
+MOVE
+  Italy: A Venice - Trieste
+  Italy: A Tyrolia Supports A Venice - Trieste
+  Austria: F Trieste Supports F Trieste
+EXPECT
+  moved: ven
+  dislodged: tri
+
+CASE 6.A.9 FLEETS MUST FOLLOW COAST IF NOT ON SEA
+MOVE
+  Italy: F Rome - Venice
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.10 SUPPORT ON UNREACHABLE DESTINATION NOT POSSIBLE
+MOVE
+  Austria: A Venice Hold
+  Italy: F Rome Supports A Apulia - Venice
+  Italy: A Apulia - Venice
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.11 SIMPLE BOUNCE
+MOVE
+  Austria: A Vienna - Tyrolia
+  Italy: A Venice - Tyrolia
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.A.12 BOUNCE OF THREE UNITS
+MOVE
+  Austria: A Vienna - Tyrolia
+  Germany: A Munich - Tyrolia
+  Italy: A Venice - Tyrolia
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.1 MOVING WITH UNSPECIFIED COAST WHEN COAST IS NECESSARY
+MOVE
+  France: F Portugal - Spain
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.2 MOVING WITH UNSPECIFIED COAST WHEN COAST IS NOT NECESSARY
+MOVE
+  France: F Gascony - Spain
+EXPECT
+  moved: gas
+  dislodged: -
+  has: France F spa/nc
+
+CASE 6.B.3 MOVING WITH WRONG COAST WHEN COAST IS NOT NECESSARY
+MOVE
+  France: F Gascony - Spain(sc)
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.4 SUPPORT TO UNREACHABLE COAST ALLOWED
+MOVE
+  France: F Gascony - Spain(nc)
+  France: F Marseilles Supports F Gascony - Spain(nc)
+  Italy: F Western Mediterranean - Spain(sc)
+EXPECT
+  moved: gas
+  dislodged: -
+
+CASE 6.B.5 SUPPORT FROM UNREACHABLE COAST NOT ALLOWED
+MOVE
+  France: F Marseilles - Gulf of Lyon
+  France: F Spain(nc) Supports F Marseilles - Gulf of Lyon
+  Italy: F Gulf of Lyon Hold
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.6 SUPPORT CAN BE CUT WITH OTHER COAST
+MOVE
+  England: F Irish Sea Supports F North Atlantic Ocean - Mid-Atlantic Ocean
+  England: F North Atlantic Ocean - Mid-Atlantic Ocean
+  France: F Spain(nc) Supports F Mid-Atlantic Ocean
+  France: F Mid-Atlantic Ocean Hold
+  Italy: F Gulf of Lyon - Spain(sc)
+EXPECT
+  moved: nao
+  dislodged: mao
+
+CASE 6.B.7 SUPPORTING OWN UNIT WITH UNSPECIFIED COAST
+MOVE
+  France: F Portugal Supports F Mid-Atlantic Ocean - Spain
+  France: F Mid-Atlantic Ocean - Spain(nc)
+  Italy: F Gulf of Lyon Supports F Western Mediterranean - Spain(sc)
+  Italy: F Western Mediterranean - Spain(sc)
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.8 SUPPORTING WITH UNSPECIFIED COAST WHEN ONLY ONE COAST IS POSSIBLE
+MOVE
+  France: F Portugal Supports F Gascony - Spain
+  France: F Gascony - Spain(nc)
+  Italy: F Gulf of Lyon Supports F Western Mediterranean - Spain(sc)
+  Italy: F Western Mediterranean - Spain(sc)
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.9 SUPPORTING WITH WRONG COAST
+MOVE
+  France: F Portugal Supports F Mid-Atlantic Ocean - Spain(nc)
+  France: F Mid-Atlantic Ocean - Spain(sc)
+  Italy: F Gulf of Lyon Supports F Western Mediterranean - Spain(sc)
+  Italy: F Western Mediterranean - Spain(sc)
+EXPECT
+  moved: wes
+  dislodged: -
+
+CASE 6.B.10 UNIT ORDERED WITH WRONG COAST
+SETUP
+  France: F Spain(sc)
+MOVE
+  France: F Spain(nc) - Gulf of Lyon
+EXPECT
+  moved: spa
+  dislodged: -
+
+CASE 6.B.11 COAST CANNOT BE ORDERED TO CHANGE
+SETUP
+  France: F Spain(nc)
+MOVE
+  France: F Spain(sc) - Gulf of Lyon
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.12 ARMY MOVEMENT WITH COASTAL SPECIFICATION
+MOVE
+  France: A Gascony - Spain(nc)
+EXPECT
+  moved: gas
+  dislodged: -
+  has: France A spa
+
+CASE 6.B.13 COASTAL CRAWL NOT ALLOWED
+MOVE
+  Turkey: F Bulgaria(sc) - Constantinople
+  Turkey: F Constantinople - Bulgaria(ec)
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.B.14 BUILDING WITH UNSPECIFIED COAST
+SETUP
+  own Russia: stp, mos, war, sev
+ADJUST
+  Russia: Build F St Petersburg
+EXPECT
+  units: -
+
+CASE 6.B.15 SUPPORTING FOREIGN UNIT WITH UNSPECIFIED COAST
+MOVE
+  France: F Portugal Supports F Mid-Atlantic Ocean - Spain
+  England: F Mid-Atlantic Ocean - Spain(nc)
+  Italy: F Gulf of Lyon Supports F Western Mediterranean - Spain(sc)
+  Italy: F Western Mediterranean - Spain(sc)
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.C.1 THREE ARMY CIRCULAR MOVEMENT
+MOVE
+  Turkey: F Ankara - Constantinople
+  Turkey: A Constantinople - Smyrna
+  Turkey: A Smyrna - Ankara
+EXPECT
+  moved: ank, con, smy
+  dislodged: -
+
+CASE 6.C.2 THREE ARMY CIRCULAR MOVEMENT WITH SUPPORT
+MOVE
+  Turkey: F Ankara - Constantinople
+  Turkey: A Constantinople - Smyrna
+  Turkey: A Smyrna - Ankara
+  Turkey: A Bulgaria Supports F Ankara - Constantinople
+EXPECT
+  moved: ank, con, smy
+  dislodged: -
+
+CASE 6.C.3 A DISRUPTED THREE ARMY CIRCULAR MOVEMENT
+MOVE
+  Turkey: F Ankara - Constantinople
+  Turkey: A Constantinople - Smyrna
+  Turkey: A Smyrna - Ankara
+  Turkey: A Bulgaria - Constantinople
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.C.4 A CIRCULAR MOVEMENT WITH ATTACKED CONVOY
+MOVE
+  Austria: A Trieste - Serbia
+  Austria: A Serbia - Bulgaria
+  Turkey: A Bulgaria - Trieste
+  Turkey: F Aegean Sea Convoys A Bulgaria - Trieste
+  Turkey: F Ionian Sea Convoys A Bulgaria - Trieste
+  Turkey: F Adriatic Sea Convoys A Bulgaria - Trieste
+  Italy: F Naples - Ionian Sea
+EXPECT
+  moved: tri, ser, bul
+  dislodged: -
+
+CASE 6.C.5 A DISRUPTED CIRCULAR MOVEMENT DUE TO DISLODGED CONVOY
+MOVE
+  Austria: A Trieste - Serbia
+  Austria: A Serbia - Bulgaria
+  Turkey: A Bulgaria - Trieste
+  Turkey: F Aegean Sea Convoys A Bulgaria - Trieste
+  Turkey: F Ionian Sea Convoys A Bulgaria - Trieste
+  Turkey: F Adriatic Sea Convoys A Bulgaria - Trieste
+  Italy: F Naples - Ionian Sea
+  Italy: F Tunis Supports F Naples - Ionian Sea
+EXPECT
+  moved: nap
+  dislodged: ion
+
+CASE 6.C.6 TWO ARMIES WITH TWO CONVOYS
+MOVE
+  England: F North Sea Convoys A London - Belgium
+  England: A London - Belgium
+  France: F English Channel Convoys A Belgium - London
+  France: A Belgium - London
+EXPECT
+  moved: lon, bel
+  dislodged: -
+
+CASE 6.C.7 DISRUPTED UNIT SWAP
+MOVE
+  England: F North Sea Convoys A London - Belgium
+  England: A London - Belgium
+  France: F English Channel Convoys A Belgium - London
+  France: A Belgium - London
+  France: A Burgundy - Belgium
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.C.8 NO SELF DISLODGEMENT IN DISRUPTED CIRCULAR MOVEMENT
+MOVE
+  Turkey: F Constantinople - Black Sea
+  Turkey: A Bulgaria - Constantinople
+  Turkey: A Smyrna Supports A Bulgaria - Constantinople
+  Russia: F Black Sea - Bulgaria(ec)
+  Austria: A Serbia - Bulgaria
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.C.9 NO HELP IN DISLODGEMENT OF OWN UNIT IN DISRUPTED CIRCULAR MOVEMENT
+MOVE
+  Turkey: F Constantinople - Black Sea
+  Turkey: A Smyrna Supports A Bulgaria - Constantinople
+  Russia: F Black Sea - Bulgaria(ec)
+  Austria: A Serbia - Bulgaria
+  Austria: A Bulgaria - Constantinople
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.1 SUPPORTED HOLD CAN PREVENT DISLODGEMENT
+MOVE
+  Austria: F Adriatic Sea Supports A Trieste - Venice
+  Austria: A Trieste - Venice
+  Italy: A Venice Hold
+  Italy: A Tyrolia Supports A Venice
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.2 A MOVE CUTS SUPPORT ON HOLD
+MOVE
+  Austria: F Adriatic Sea Supports A Trieste - Venice
+  Austria: A Trieste - Venice
+  Austria: A Vienna - Tyrolia
+  Italy: A Venice Hold
+  Italy: A Tyrolia Supports A Venice
+EXPECT
+  moved: tri
+  dislodged: ven
+
+CASE 6.D.3 A MOVE CUTS SUPPORT ON MOVE
+MOVE
+  Austria: F Adriatic Sea Supports A Trieste - Venice
+  Austria: A Trieste - Venice
+  Italy: A Venice Hold
+  Italy: F Ionian Sea - Adriatic Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.4 SUPPORT TO HOLD ON UNIT SUPPORTING A HOLD ALLOWED
+MOVE
+  Germany: A Berlin Supports F Kiel
+  Germany: F Kiel Supports A Berlin
+  Russia: F Baltic Sea Supports A Prussia - Berlin
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.5 SUPPORT TO HOLD ON UNIT SUPPORTING A MOVE ALLOWED
+MOVE
+  Germany: A Berlin Supports A Munich - Silesia
+  Germany: F Kiel Supports A Berlin
+  Germany: A Munich - Silesia
+  Russia: F Baltic Sea Supports A Prussia - Berlin
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: mun
+  dislodged: -
+
+CASE 6.D.6 SUPPORT TO HOLD ON CONVOYING UNIT ALLOWED
+MOVE
+  Germany: A Berlin - Sweden
+  Germany: F Baltic Sea Convoys A Berlin - Sweden
+  Germany: F Prussia Supports F Baltic Sea
+  Russia: F Livonia - Baltic Sea
+  Russia: F Gulf of Bothnia Supports F Livonia - Baltic Sea
+EXPECT
+  moved: ber
+  dislodged: -
+
+CASE 6.D.7 SUPPORT TO HOLD ON MOVING UNIT NOT ALLOWED
+MOVE
+  Germany: F Baltic Sea - Sweden
+  Germany: F Prussia Supports F Baltic Sea
+  Russia: F Livonia - Baltic Sea
+  Russia: F Gulf of Bothnia Supports F Livonia - Baltic Sea
+  Russia: A Finland - Sweden
+EXPECT
+  moved: lvn
+  dislodged: bal
+
+CASE 6.D.8 FAILED CONVOY CANNOT RECEIVE HOLD SUPPORT
+MOVE
+  Austria: F Ionian Sea Hold
+  Austria: A Serbia Supports A Albania - Greece
+  Austria: A Albania - Greece
+  Turkey: A Greece - Naples
+  Turkey: A Bulgaria Supports A Greece
+EXPECT
+  moved: alb
+  dislodged: gre
+
+CASE 6.D.9 SUPPORT TO MOVE ON HOLDING UNIT NOT ALLOWED
+MOVE
+  Italy: A Venice - Trieste
+  Italy: A Tyrolia Supports A Venice - Trieste
+  Austria: A Albania Supports A Trieste - Serbia
+  Austria: A Trieste Hold
+EXPECT
+  moved: ven
+  dislodged: tri
+
+CASE 6.D.10 SELF DISLODGMENT PROHIBITED
+MOVE
+  Germany: A Berlin Hold
+  Germany: F Kiel - Berlin
+  Germany: A Munich Supports F Kiel - Berlin
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.11 NO SELF DISLODGMENT OF RETURNING UNIT
+MOVE
+  Germany: A Berlin - Prussia
+  Germany: F Kiel - Berlin
+  Germany: A Munich Supports F Kiel - Berlin
+  Russia: A Warsaw - Prussia
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.12 SUPPORTING A FOREIGN UNIT TO DISLODGE OWN UNIT PROHIBITED
+MOVE
+  Austria: F Trieste Hold
+  Austria: A Vienna Supports A Venice - Trieste
+  Italy: A Venice - Trieste
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.13 SUPPORTING A FOREIGN UNIT TO DISLODGE A RETURNING OWN UNIT PROHIBITED
+MOVE
+  Austria: F Trieste - Adriatic Sea
+  Austria: A Vienna Supports A Venice - Trieste
+  Italy: A Venice - Trieste
+  Italy: F Apulia - Adriatic Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.14 SUPPORTING A FOREIGN UNIT IS NOT ENOUGH TO PREVENT DISLODGEMENT
+MOVE
+  Austria: F Trieste Hold
+  Austria: A Vienna Supports A Venice - Trieste
+  Italy: A Venice - Trieste
+  Italy: A Tyrolia Supports A Venice - Trieste
+  Italy: F Adriatic Sea Supports A Venice - Trieste
+EXPECT
+  moved: ven
+  dislodged: tri
+
+CASE 6.D.15 DEFENDER CANNOT CUT SUPPORT FOR ATTACK ON ITSELF
+MOVE
+  Russia: F Constantinople Supports F Black Sea - Ankara
+  Russia: F Black Sea - Ankara
+  Turkey: F Ankara - Constantinople
+EXPECT
+  moved: bla
+  dislodged: ank
+
+CASE 6.D.16 CONVOYING A UNIT DISLODGING A UNIT OF SAME POWER IS ALLOWED
+MOVE
+  England: A London Hold
+  England: F North Sea Convoys A Belgium - London
+  France: F English Channel Supports A Belgium - London
+  France: A Belgium - London
+EXPECT
+  moved: bel
+  dislodged: lon
+
+CASE 6.D.17 DISLODGEMENT CUTS SUPPORTS
+MOVE
+  Russia: F Constantinople Supports F Black Sea - Ankara
+  Russia: F Black Sea - Ankara
+  Turkey: F Ankara - Constantinople
+  Turkey: A Smyrna Supports F Ankara - Constantinople
+  Turkey: A Armenia - Ankara
+EXPECT
+  moved: ank
+  dislodged: con
+
+CASE 6.D.18 A SURVIVING UNIT WILL SUSTAIN SUPPORT
+MOVE
+  Russia: F Constantinople Supports F Black Sea - Ankara
+  Russia: F Black Sea - Ankara
+  Russia: A Bulgaria Supports F Constantinople
+  Turkey: F Ankara - Constantinople
+  Turkey: A Smyrna Supports F Ankara - Constantinople
+  Turkey: A Armenia - Ankara
+EXPECT
+  moved: bla
+  dislodged: ank
+
+CASE 6.D.19 EVEN WHEN SURVIVING IS IN ALTERNATIVE WAY
+MOVE
+  Russia: F Constantinople Supports F Black Sea - Ankara
+  Russia: F Black Sea - Ankara
+  Russia: A Smyrna Supports F Ankara - Constantinople
+  Turkey: F Ankara - Constantinople
+EXPECT
+  moved: bla
+  dislodged: ank
+
+CASE 6.D.20 UNIT CANNOT CUT SUPPORT OF ITS OWN COUNTRY
+MOVE
+  England: F London Supports F North Sea - English Channel
+  England: F North Sea - English Channel
+  England: A Yorkshire - London
+  France: F English Channel Hold
+EXPECT
+  moved: nth
+  dislodged: eng
+
+CASE 6.D.21 DISLODGING DOES NOT CANCEL A SUPPORT CUT
+MOVE
+  Austria: F Trieste Hold
+  Italy: A Venice - Trieste
+  Italy: A Tyrolia Supports A Venice - Trieste
+  Germany: A Munich - Tyrolia
+  Russia: A Silesia - Munich
+  Russia: A Berlin Supports A Silesia - Munich
+EXPECT
+  moved: sil
+  dislodged: mun
+
+CASE 6.D.22 IMPOSSIBLE FLEET MOVE CANNOT BE SUPPORTED
+MOVE
+  Germany: F Kiel - Munich
+  Germany: A Burgundy Supports F Kiel - Munich
+  Russia: A Munich - Kiel
+  Russia: A Berlin Supports A Munich - Kiel
+EXPECT
+  moved: mun
+  dislodged: kie
+
+CASE 6.D.23 IMPOSSIBLE COAST MOVE CANNOT BE SUPPORTED
+MOVE
+  Italy: F Gulf of Lyon - Spain(sc)
+  Italy: F Western Mediterranean Supports F Gulf of Lyon - Spain(sc)
+  France: F Spain(nc) - Gulf of Lyon
+  France: F Marseilles Supports F Spain(nc) - Gulf of Lyon
+EXPECT
+  moved: lyo
+  dislodged: spa
+
+CASE 6.D.24 IMPOSSIBLE ARMY MOVE CANNOT BE SUPPORTED
+MOVE
+  France: A Marseilles - Gulf of Lyon
+  France: F Spain(sc) Supports A Marseilles - Gulf of Lyon
+  Italy: F Gulf of Lyon Hold
+  Turkey: F Tyrrhenian Sea Supports F Western Mediterranean - Gulf of Lyon
+  Turkey: F Western Mediterranean - Gulf of Lyon
+EXPECT
+  moved: wes
+  dislodged: lyo
+
+CASE 6.D.25 FAILING HOLD SUPPORT CAN BE SUPPORTED
+MOVE
+  Germany: A Berlin Supports A Prussia
+  Germany: F Kiel Supports A Berlin
+  Russia: F Baltic Sea Supports A Prussia - Berlin
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.26 FAILING MOVE SUPPORT CAN BE SUPPORTED
+MOVE
+  Germany: A Berlin Supports A Prussia - Silesia
+  Germany: F Kiel Supports A Berlin
+  Russia: F Baltic Sea Supports A Prussia - Berlin
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.27 FAILING CONVOY CAN BE SUPPORTED
+MOVE
+  England: F Sweden - Baltic Sea
+  England: F Denmark Supports F Sweden - Baltic Sea
+  Germany: A Berlin Hold
+  Russia: F Baltic Sea Convoys A Berlin - Livonia
+  Russia: F Prussia Supports F Baltic Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.28 IMPOSSIBLE MOVE AND SUPPORT
+MOVE
+  Austria: A Budapest Supports F Rumania
+  Russia: F Rumania - Holland
+  Turkey: F Black Sea - Rumania
+  Turkey: A Bulgaria Supports F Black Sea - Rumania
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.29 MOVE TO IMPOSSIBLE COAST AND SUPPORT
+MOVE
+  Austria: A Budapest Supports F Rumania
+  Russia: F Rumania - Bulgaria(sc)
+  Turkey: F Black Sea - Rumania
+  Turkey: A Bulgaria Supports F Black Sea - Rumania
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.30 MOVE WITHOUT COAST AND SUPPORT
+MOVE
+  Italy: F Aegean Sea Supports F Constantinople
+  Russia: F Constantinople - Bulgaria
+  Turkey: F Black Sea - Constantinople
+  Turkey: A Bulgaria Supports F Black Sea - Constantinople
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.31 A TRICKY IMPOSSIBLE SUPPORT
+MOVE
+  Austria: A Rumania - Armenia
+  Turkey: F Black Sea Supports A Rumania - Armenia
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.32 A MISSING FLEET
+MOVE
+  England: F Edinburgh Supports A Liverpool - Yorkshire
+  England: A Liverpool - Yorkshire
+  France: F London Supports A Yorkshire
+  Germany: A Yorkshire - Holland
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.D.33 UNWANTED SUPPORT ALLOWED
+MOVE
+  Austria: A Serbia - Budapest
+  Austria: A Vienna - Budapest
+  Russia: A Galicia Supports A Serbia - Budapest
+  Turkey: A Bulgaria - Serbia
+EXPECT
+  moved: ser, bul
+  dislodged: -
+
+CASE 6.D.34 SUPPORT TARGETING OWN AREA NOT ALLOWED
+MOVE
+  Germany: A Berlin - Prussia
+  Germany: A Silesia Supports A Berlin - Prussia
+  Germany: F Baltic Sea Supports A Berlin - Prussia
+  Italy: A Prussia Supports Livonia - Prussia
+  Russia: A Warsaw Supports A Livonia - Prussia
+  Russia: A Livonia - Prussia
+EXPECT
+  moved: ber
+  dislodged: pru
+
+CASE 6.E.1 DISLODGED UNIT HAS NO EFFECT ON ATTACKER'S AREA
+MOVE
+  Germany: A Berlin - Prussia
+  Germany: F Kiel - Berlin
+  Germany: A Silesia Supports A Berlin - Prussia
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: ber, kie
+  dislodged: pru
+
+CASE 6.E.2 NO SELF DISLODGEMENT IN HEAD-TO-HEAD BATTLE
+MOVE
+  Germany: A Berlin - Kiel
+  Germany: F Kiel - Berlin
+  Germany: A Munich Supports A Berlin - Kiel
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.3 NO HELP IN DISLODGING OWN UNIT
+MOVE
+  Germany: A Berlin - Kiel
+  Germany: A Munich Supports F Kiel - Berlin
+  England: F Kiel - Berlin
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.4 NON-DISLODGED LOSER STILL HAS EFFECT
+MOVE
+  Germany: F Holland - North Sea
+  Germany: F Helgoland Bight Supports F Holland - North Sea
+  Germany: F Skagerrak Supports F Holland - North Sea
+  France: F North Sea - Holland
+  France: F Belgium Supports F North Sea - Holland
+  England: F Edinburgh Supports F Norwegian Sea - North Sea
+  England: F Yorkshire Supports F Norwegian Sea - North Sea
+  England: F Norwegian Sea - North Sea
+  Austria: A Kiel Supports A Ruhr - Holland
+  Austria: A Ruhr - Holland
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.5 LOSER DISLODGED BY ANOTHER ARMY STILL HAS EFFECT
+MOVE
+  Germany: F Holland - North Sea
+  Germany: F Helgoland Bight Supports F Holland - North Sea
+  Germany: F Skagerrak Supports F Holland - North Sea
+  France: F North Sea - Holland
+  France: F Belgium Supports F North Sea - Holland
+  England: F Edinburgh Supports F Norwegian Sea - North Sea
+  England: F Yorkshire Supports F Norwegian Sea - North Sea
+  England: F Norwegian Sea - North Sea
+  England: F London Supports F Norwegian Sea - North Sea
+  Austria: A Kiel Supports A Ruhr - Holland
+  Austria: A Ruhr - Holland
+EXPECT
+  moved: nwg
+  dislodged: nth
+
+CASE 6.E.6 NOT DISLODGE BECAUSE OF OWN SUPPORT STILL HAS EFFECT
+MOVE
+  Germany: F Holland - North Sea
+  Germany: F Helgoland Bight Supports F Holland - North Sea
+  France: F North Sea - Holland
+  France: F Belgium Supports F North Sea - Holland
+  France: F English Channel Supports F Holland - North Sea
+  Austria: A Kiel Supports A Ruhr - Holland
+  Austria: A Ruhr - Holland
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.7 NO SELF DISLODGEMENT WITH BELEAGUERED GARRISON
+MOVE
+  England: F North Sea Hold
+  England: F Yorkshire Supports F Norway - North Sea
+  Germany: F Holland Supports F Helgoland Bight - North Sea
+  Germany: F Helgoland Bight - North Sea
+  Russia: F Skagerrak Supports F Norway - North Sea
+  Russia: F Norway - North Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.8 NO SELF DISLODGEMENT WITH BELEAGUERED GARRISON AND HEAD-TO-HEAD BATTLE
+MOVE
+  England: F North Sea - Norway
+  England: F Yorkshire Supports F Norway - North Sea
+  Germany: F Holland Supports F Helgoland Bight - North Sea
+  Germany: F Helgoland Bight - North Sea
+  Russia: F Skagerrak Supports F Norway - North Sea
+  Russia: F Norway - North Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.9 ALMOST SELF DISLODGEMENT WITH BELEAGUERED GARRISON
+MOVE
+  England: F North Sea - Norwegian Sea
+  England: F Yorkshire Supports F Norway - North Sea
+  Germany: F Holland Supports F Helgoland Bight - North Sea
+  Germany: F Helgoland Bight - North Sea
+  Russia: F Skagerrak Supports F Norway - North Sea
+  Russia: F Norway - North Sea
+EXPECT
+  moved: nth, nwy
+  dislodged: -
+
+CASE 6.E.10 ALMOST CIRCULAR MOVEMENT WITH NO SELF DISLODGEMENT WITH BELEAGUERED GARRISON
+MOVE
+  England: F North Sea - Denmark
+  England: F Yorkshire Supports F Norway - North Sea
+  Germany: F Holland Supports F Helgoland Bight - North Sea
+  Germany: F Helgoland Bight - North Sea
+  Germany: F Denmark - Helgoland Bight
+  Russia: F Skagerrak Supports F Norway - North Sea
+  Russia: F Norway - North Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.11 NO SELF DISLODGEMENT WITH BELEAGUERED GARRISON, UNIT SWAP WITH ADJACENT CONVOYING AND TWO COASTS
+MOVE
+  France: A Spain - Portugal via convoy
+  France: F Mid-Atlantic Ocean Convoys A Spain - Portugal
+  France: F Gulf of Lyon Supports F Portugal - Spain(nc)
+  Germany: A Marseilles Supports A Gascony - Spain
+  Germany: A Gascony - Spain
+  Italy: F Portugal - Spain(nc)
+  Italy: F Western Mediterranean Supports F Portugal - Spain(nc)
+EXPECT
+  moved: spa, por
+  dislodged: -
+  has: Italy F spa/nc
+  has: France A por
+
+CASE 6.E.12 SUPPORT ON ATTACK ON OWN UNIT CAN BE USED FOR OTHER MEANS
+MOVE
+  Austria: A Budapest - Rumania
+  Austria: A Serbia Supports A Vienna - Budapest
+  Italy: A Vienna - Budapest
+  Russia: A Galicia - Budapest
+  Russia: A Rumania Supports A Galicia - Budapest
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.13 THREE WAY BELEAGUERED GARRISON
+MOVE
+  England: F Edinburgh Supports F Yorkshire - North Sea
+  England: F Yorkshire - North Sea
+  France: F Belgium - North Sea
+  France: F English Channel Supports F Belgium - North Sea
+  Germany: F North Sea Hold
+  Russia: F Norwegian Sea - North Sea
+  Russia: F Norway Supports F Norwegian Sea - North Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.14 ILLEGAL HEAD-TO-HEAD BATTLE CAN STILL DEFEND
+MOVE
+  England: A Liverpool - Edinburgh
+  Russia: F Edinburgh - Liverpool
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.E.15 THE FRIENDLY HEAD-TO-HEAD BATTLE
+MOVE
+  England: F Holland Supports A Ruhr - Kiel
+  England: A Ruhr - Kiel
+  France: A Kiel - Berlin
+  France: A Munich Supports A Kiel - Berlin
+  France: A Silesia Supports A Kiel - Berlin
+  Germany: A Berlin - Kiel
+  Germany: F Denmark Supports A Berlin - Kiel
+  Germany: F Helgoland Bight Supports A Berlin - Kiel
+  Russia: F Baltic Sea Supports A Prussia - Berlin
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.1 NO CONVOY IN COASTAL AREAS
+MOVE
+  Turkey: A Greece - Sevastopol
+  Turkey: F Aegean Sea Convoys A Greece - Sevastopol
+  Turkey: F Constantinople Convoys A Greece - Sevastopol
+  Turkey: F Black Sea Convoys A Greece - Sevastopol
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.2 AN ARMY BEING CONVOYED CAN BOUNCE AS NORMAL
+MOVE
+  England: F English Channel Convoys A London - Brest
+  England: A London - Brest
+  France: A Paris - Brest
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.3 AN ARMY BEING CONVOYED CAN RECEIVE SUPPORT
+MOVE
+  England: F English Channel Convoys A London - Brest
+  England: A London - Brest
+  England: F Mid-Atlantic Ocean Supports A London - Brest
+  France: A Paris - Brest
+EXPECT
+  moved: lon
+  dislodged: -
+
+CASE 6.F.4 AN ATTACKED CONVOY IS NOT DISRUPTED
+MOVE
+  England: F North Sea Convoys A London - Holland
+  England: A London - Holland
+  Germany: F Skagerrak - North Sea
+EXPECT
+  moved: lon
+  dislodged: -
+
+CASE 6.F.5 A BELEAGUERED CONVOY IS NOT DISRUPTED
+MOVE
+  England: F North Sea Convoys A London - Holland
+  England: A London - Holland
+  France: F English Channel - North Sea
+  France: F Belgium Supports F English Channel - North Sea
+  Germany: F Skagerrak - North Sea
+  Germany: F Denmark Supports F Skagerrak - North Sea
+EXPECT
+  moved: lon
+  dislodged: -
+
+CASE 6.F.6 DISLODGED CONVOY DOES NOT CUT SUPPORT
+MOVE
+  England: F North Sea Convoys A London - Holland
+  England: A London - Holland
+  Germany: A Holland Supports A Belgium
+  Germany: A Belgium Supports A Holland
+  Germany: F Helgoland Bight Supports F Skagerrak - North Sea
+  Germany: F Skagerrak - North Sea
+  France: A Picardy - Belgium
+  France: A Burgundy Supports A Picardy - Belgium
+EXPECT
+  moved: ska
+  dislodged: nth
+
+CASE 6.F.7 DISLODGED CONVOY DOES NOT CAUSE CONTESTED AREA
+MOVE
+  England: F North Sea Convoys A London - Holland
+  England: A London - Holland
+  Germany: F Helgoland Bight Supports F Skagerrak - North Sea
+  Germany: F Skagerrak - North Sea
+EXPECT
+  moved: ska
+  dislodged: nth
+  can-retreat: nth > hol
+
+CASE 6.F.8 DISLODGED CONVOY DOES NOT CAUSE A BOUNCE
+MOVE
+  England: F North Sea Convoys A London - Holland
+  England: A London - Holland
+  Germany: F Helgoland Bight Supports F Skagerrak - North Sea
+  Germany: F Skagerrak - North Sea
+  Germany: A Belgium - Holland
+EXPECT
+  moved: ska, bel
+  dislodged: nth
+
+CASE 6.F.9 DISLODGE OF MULTI-ROUTE CONVOY
+MOVE
+  England: F English Channel Convoys A London - Belgium
+  England: F North Sea Convoys A London - Belgium
+  England: A London - Belgium
+  France: F Brest Supports F Mid-Atlantic Ocean - English Channel
+  France: F Mid-Atlantic Ocean - English Channel
+EXPECT
+  moved: mao, lon
+  dislodged: eng
+
+CASE 6.F.10 DISLODGE OF MULTI-ROUTE CONVOY WITH FOREIGN FLEET
+MOVE
+  England: F North Sea Convoys A London - Belgium
+  England: A London - Belgium
+  Germany: F English Channel Convoys A London - Belgium
+  France: F Brest Supports F Mid-Atlantic Ocean - English Channel
+  France: F Mid-Atlantic Ocean - English Channel
+EXPECT
+  moved: mao, lon
+  dislodged: eng
+
+CASE 6.F.11 DISLODGE OF MULTI-ROUTE CONVOY WITH ONLY FOREIGN FLEETS
+MOVE
+  England: A London - Belgium
+  Germany: F English Channel Convoys A London - Belgium
+  Russia: F North Sea Convoys A London - Belgium
+  France: F Brest Supports F Mid-Atlantic Ocean - English Channel
+  France: F Mid-Atlantic Ocean - English Channel
+EXPECT
+  moved: mao, lon
+  dislodged: eng
+
+CASE 6.F.12 DISLODGED CONVOYING FLEET NOT ON ROUTE
+MOVE
+  England: F English Channel Convoys A London - Belgium
+  England: A London - Belgium
+  England: F Irish Sea Convoys A London - Belgium
+  France: F North Atlantic Ocean Supports F Mid-Atlantic Ocean - Irish Sea
+  France: F Mid-Atlantic Ocean - Irish Sea
+EXPECT
+  moved: lon, mao
+  dislodged: iri
+
+CASE 6.F.13 THE UNWANTED ALTERNATIVE
+MOVE
+  England: A London - Belgium
+  England: F North Sea Convoys A London - Belgium
+  France: F English Channel Convoys A London - Belgium
+  Germany: F Holland Supports F Denmark - North Sea
+  Germany: F Denmark - North Sea
+EXPECT
+  moved: lon, den
+  dislodged: nth
+
+CASE 6.F.14 SIMPLE CONVOY PARADOX
+MOVE
+  England: F London Supports F Wales - English Channel
+  England: F Wales - English Channel
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+EXPECT
+  moved: wal
+  dislodged: eng
+
+CASE 6.F.15 SIMPLE CONVOY PARADOX WITH ADDITIONAL CONVOY
+MOVE
+  England: F London Supports F Wales - English Channel
+  England: F Wales - English Channel
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+  Italy: F Irish Sea Convoys A North Africa - Wales
+  Italy: F Mid-Atlantic Ocean Convoys A North Africa - Wales
+  Italy: A North Africa - Wales
+EXPECT
+  moved: wal, naf
+  dislodged: eng
+
+CASE 6.F.16 PANDIN'S PARADOX
+MOVE
+  England: F London Supports F Wales - English Channel
+  England: F Wales - English Channel
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+  Germany: F North Sea Supports F Belgium - English Channel
+  Germany: F Belgium - English Channel
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.17 PANDIN'S EXTENDED PARADOX
+MOVE
+  England: F London Supports F Wales - English Channel
+  England: F Wales - English Channel
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+  France: F Yorkshire Supports A Brest - London
+  Germany: F North Sea Supports F Belgium - English Channel
+  Germany: F Belgium - English Channel
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.18 BETRAYAL PARADOX
+MOVE
+  England: F North Sea Convoys A London - Belgium
+  England: A London - Belgium
+  England: F English Channel Supports A London - Belgium
+  France: F Belgium Supports F North Sea
+  Germany: F Helgoland Bight Supports F Skagerrak - North Sea
+  Germany: F Skagerrak - North Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.19 MULTI-ROUTE CONVOY DISRUPTION PARADOX
+MOVE
+  France: A Tunis - Naples
+  France: F Tyrrhenian Sea Convoys A Tunis - Naples
+  France: F Ionian Sea Convoys A Tunis - Naples
+  Italy: F Naples Supports F Rome - Tyrrhenian Sea
+  Italy: F Rome - Tyrrhenian Sea
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.20 UNWANTED MULTI-ROUTE CONVOY PARADOX
+MOVE
+  France: A Tunis - Naples
+  France: F Tyrrhenian Sea Convoys A Tunis - Naples
+  Italy: F Naples Supports F Ionian Sea
+  Italy: F Ionian Sea Convoys A Tunis - Naples
+  Turkey: F Aegean Sea Supports F Eastern Mediterranean - Ionian Sea
+  Turkey: F Eastern Mediterranean - Ionian Sea
+EXPECT
+  moved: eas
+  dislodged: ion
+
+CASE 6.F.21 DAD'S ARMY CONVOY
+MOVE
+  Russia: A Edinburgh Supports A Norway - Clyde
+  Russia: F Norwegian Sea Convoys A Norway - Clyde
+  Russia: A Norway - Clyde
+  France: F Irish Sea Supports F Mid-Atlantic Ocean - North Atlantic Ocean
+  France: F Mid-Atlantic Ocean - North Atlantic Ocean
+  England: A Liverpool - Clyde via convoy
+  England: F North Atlantic Ocean Convoys A Liverpool - Clyde
+  England: F Clyde Supports F North Atlantic Ocean
+EXPECT
+  moved: nwy, mao
+  dislodged: nao, cly
+
+CASE 6.F.22 SECOND ORDER PARADOX WITH TWO RESOLUTIONS
+MOVE
+  England: F Edinburgh - North Sea
+  England: F London Supports F Edinburgh - North Sea
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+  Germany: F Belgium Supports F Picardy - English Channel
+  Germany: F Picardy - English Channel
+  Russia: A Norway - Belgium
+  Russia: F North Sea Convoys A Norway - Belgium
+EXPECT
+  moved: edi, pic
+  dislodged: nth, eng
+
+CASE 6.F.23 SECOND ORDER PARADOX WITH TWO EXCLUSIVE CONVOYS
+MOVE
+  England: F Edinburgh - North Sea
+  England: F Yorkshire Supports F Edinburgh - North Sea
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+  Germany: F Belgium Supports F English Channel
+  Germany: F London Supports F North Sea
+  Italy: F Mid-Atlantic Ocean - English Channel
+  Italy: F Irish Sea Supports F Mid-Atlantic Ocean - English Channel
+  Russia: A Norway - Belgium
+  Russia: F North Sea Convoys A Norway - Belgium
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.F.24 SECOND ORDER PARADOX WITH NO RESOLUTION
+MOVE
+  England: F Edinburgh - North Sea
+  England: F London Supports F Edinburgh - North Sea
+  England: F Irish Sea - English Channel
+  England: F Mid-Atlantic Ocean Supports F Irish Sea - English Channel
+  France: A Brest - London
+  France: F English Channel Convoys A Brest - London
+  France: F Belgium Supports F English Channel
+  Russia: A Norway - Belgium
+  Russia: F North Sea Convoys A Norway - Belgium
+EXPECT
+  moved: edi
+  dislodged: nth
+
+CASE 6.F.25 CUT SUPPORT LAST
+MOVE
+  Germany: A Rhur - Belgium
+  Germany: A Holland Supports Rhur - Belgium
+  Germany: A Denmark - Norway
+  Germany: F Skagerrak Convoys Denmark - Norway
+  Germany: A Finland Supports Denmark - Norway
+  England: A Yorkshire - Holland
+  England: F North Sea Convoys Yorkshire - Holland
+  England: F Helgoland Bight Supports Yorkshire - Holland
+  England: A Belgium Hold
+  Russia: F Norwegian Sea - North Sea
+  Russia: F Norway Supports Norwegian Sea - North Sea
+  Russia: F Sweden - Skagerrak
+EXPECT
+  moved: den, yor
+  dislodged: nwy, hol
+
+CASE 6.G.1 TWO UNITS CAN SWAP PROVINCES BY CONVOY
+MOVE
+  England: A Norway - Sweden
+  England: F Skagerrak Convoys A Norway - Sweden
+  Russia: A Sweden - Norway
+EXPECT
+  moved: nwy, swe
+  dislodged: -
+
+CASE 6.G.2 KIDNAPPING AN ARMY
+MOVE
+  England: A Norway - Sweden
+  Russia: F Sweden - Norway
+  Germany: F Skagerrak Convoys A Norway - Sweden
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.G.3 AN UNWANTED DISRUPTED CONVOY TO ADJACENT PROVINCE
+MOVE
+  France: F Brest - English Channel
+  France: A Picardy - Belgium
+  France: A Burgundy Supports A Picardy - Belgium
+  France: F Mid-Atlantic Ocean Supports F Brest - English Channel
+  England: F English Channel Convoys A Picardy - Belgium
+EXPECT
+  moved: bre, pic
+  dislodged: eng
+
+CASE 6.G.4 AN UNWANTED DISRUPTED CONVOY TO ADJACENT PROVINCE AND OPPOSITE MOVE
+MOVE
+  France: F Brest - English Channel
+  France: A Picardy - Belgium
+  France: A Burgundy Supports A Picardy - Belgium
+  France: F Mid-Atlantic Ocean Supports F Brest - English Channel
+  England: F English Channel Convoys A Picardy - Belgium
+  England: A Belgium - Picardy
+EXPECT
+  moved: bre, pic
+  dislodged: eng, bel
+
+CASE 6.G.5 SWAPPING WITH MULTIPLE FLEETS WITH ONE OWN FLEET
+MOVE
+  Italy: A Rome - Apulia
+  Italy: F Tyrrhenian Sea Convoys A Apulia - Rome
+  Turkey: A Apulia - Rome
+  Turkey: F Ionian Sea Convoys A Apulia - Rome
+EXPECT
+  moved: rom, apu
+  dislodged: -
+
+CASE 6.G.6 SWAPPING WITH UNINTENDED INTENT
+MOVE
+  England: A Liverpool - Edinburgh
+  England: F English Channel Convoys A Liverpool - Edinburgh
+  Germany: A Edinburgh - Liverpool
+  France: F Irish Sea Hold
+  France: F North Sea Hold
+  Russia: F Norwegian Sea Convoys A Liverpool - Edinburgh
+  Russia: F North Atlantic Ocean Convoys A Liverpool - Edinburgh
+EXPECT
+  moved: lvp, edi
+  dislodged: -
+
+CASE 6.G.7 SWAPPING WITH ILLEGAL INTENT
+MOVE
+  England: F Skagerrak Convoys A Sweden - Norway
+  England: F Norway - Sweden
+  Russia: A Sweden - Norway
+  Russia: F Gulf of Bothnia Convoys A Sweden - Norway
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.G.8 EXPLICIT CONVOY THAT ISN'T THERE
+MOVE
+  France: A Belgium - Holland via convoy
+  England: F North Sea - Helgoland Bight
+  England: A Holland - Kiel
+EXPECT
+  moved: nth, hol
+  dislodged: -
+
+CASE 6.G.9 SWAPPED OR DISLODGED?
+MOVE
+  England: A Norway - Sweden
+  England: F Skagerrak Convoys A Norway - Sweden
+  England: F Finland Supports A Norway - Sweden
+  Russia: A Sweden - Norway
+EXPECT
+  moved: nwy, swe
+  dislodged: -
+
+CASE 6.G.10 SWAPPED OR AN HEAD-TO-HEAD BATTLE?
+MOVE
+  England: A Norway - Sweden via convoy
+  England: F Denmark Supports A Norway - Sweden
+  England: F Finland Supports A Norway - Sweden
+  Germany: F Skagerrak Convoys A Norway - Sweden
+  Russia: A Sweden - Norway
+  Russia: F Barents Sea Supports A Sweden - Norway
+  France: F Norwegian Sea - Norway
+  France: F North Sea Supports F Norwegian Sea - Norway
+EXPECT
+  moved: nwy
+  dislodged: swe
+
+CASE 6.G.11 A CONVOY TO AN ADJACENT PROVINCE WITH A PARADOX
+MOVE
+  England: F Norway Supports F North Sea - Skagerrak
+  England: F North Sea - Skagerrak
+  Russia: A Sweden - Norway
+  Russia: F Skagerrak Convoys A Sweden - Norway
+  Russia: F Barents Sea Supports A Sweden - Norway
+EXPECT
+  moved: nth
+  dislodged: ska
+
+CASE 6.G.12 SWAPPING TWO UNITS WITH TWO CONVOYS
+MOVE
+  England: A Liverpool - Edinburgh via convoy
+  England: F North Atlantic Ocean Convoys A Liverpool - Edinburgh
+  England: F Norwegian Sea Convoys A Liverpool - Edinburgh
+  Germany: A Edinburgh - Liverpool via convoy
+  Germany: F North Sea Convoys A Edinburgh - Liverpool
+  Germany: F English Channel Convoys A Edinburgh - Liverpool
+  Germany: F Irish Sea Convoys A Edinburgh - Liverpool
+EXPECT
+  moved: lvp, edi
+  dislodged: -
+
+CASE 6.G.13 SUPPORT CUT ON ATTACK ON ITSELF VIA CONVOY
+MOVE
+  Austria: F Adriatic Sea Convoys A Trieste - Venice
+  Austria: A Trieste - Venice via convoy
+  Italy: A Venice Supports F Albania - Trieste
+  Italy: F Albania - Trieste
+EXPECT
+  moved: alb
+  dislodged: tri
+
+CASE 6.G.14 BOUNCE BY CONVOY TO ADJACENT PROVINCE
+MOVE
+  England: A Norway - Sweden
+  England: F Denmark Supports A Norway - Sweden
+  England: F Finland Supports A Norway - Sweden
+  France: F Norwegian Sea - Norway
+  France: F North Sea Supports F Norwegian Sea - Norway
+  Germany: F Skagerrak Convoys A Sweden - Norway
+  Russia: A Sweden - Norway via convoy
+  Russia: F Barents Sea Supports A Sweden - Norway
+EXPECT
+  moved: nwy
+  dislodged: swe
+
+CASE 6.G.15 BOUNCE AND DISLODGE WITH DOUBLE CONVOY
+MOVE
+  England: F North Sea Convoys A London - Belgium
+  England: A Holland Supports A London - Belgium
+  England: A Yorkshire - London
+  England: A London - Belgium via convoy
+  France: F English Channel Convoys A Belgium - London
+  France: A Belgium - London via convoy
+EXPECT
+  moved: lon
+  dislodged: bel
+
+CASE 6.G.16 THE TWO UNIT IN ONE AREA BUG, MOVING BY CONVOY
+MOVE
+  England: A Norway - Sweden
+  England: A Denmark Supports A Norway - Sweden
+  England: F Baltic Sea Supports A Norway - Sweden
+  England: F North Sea - Norway
+  Russia: A Sweden - Norway via convoy
+  Russia: F Skagerrak Convoys A Sweden - Norway
+  Russia: F Norwegian Sea Supports A Sweden - Norway
+EXPECT
+  moved: nwy, swe
+  dislodged: -
+
+CASE 6.G.17 THE TWO UNIT IN ONE AREA BUG, MOVING OVER LAND
+MOVE
+  England: A Norway - Sweden via convoy
+  England: A Denmark Supports A Norway - Sweden
+  England: F Baltic Sea Supports A Norway - Sweden
+  England: F Skagerrak Convoys A Norway - Sweden
+  England: F North Sea - Norway
+  Russia: A Sweden - Norway
+  Russia: F Norwegian Sea Supports A Sweden - Norway
+EXPECT
+  moved: nwy, swe
+  dislodged: -
+
+CASE 6.G.18 THE TWO UNIT IN ONE AREA BUG, WITH DOUBLE CONVOY
+MOVE
+  England: F North Sea Convoys A London - Belgium
+  England: A Holland Supports A London - Belgium
+  England: A Yorkshire - London
+  England: A London - Belgium
+  England: A Ruhr Supports A London - Belgium
+  France: F English Channel Convoys A Belgium - London
+  France: A Belgium - London
+  France: A Wales Supports A Belgium - London
+EXPECT
+  moved: lon, bel
+  dislodged: -
+
+CASE 6.G.19 SWAPPING WITH INTENT OF UNNECESSARY CONVOY
+MOVE
+  France: A Marseilles - Spain
+  France: F Western Mediterranean Convoys A Marseilles - Spain
+  Italy: F Gulf of Lyon Convoys A Marseilles - Spain
+  Italy: A Spain - Marseilles
+EXPECT
+  moved: -
+  dislodged: -
+
+CASE 6.G.20 EXPLICIT CONVOY TO ADJACENT PROVINCE DISRUPTED
+MOVE
+  France: F Brest - English Channel
+  France: A Picardy - Belgium via Convoy
+  France: A Burgundy Supports A Picardy - Belgium
+  France: F Mid-Atlantic Ocean Supports F Brest - English Channel
+  England: F English Channel Convoys A Picardy - Belgium
+EXPECT
+  moved: bre
+  dislodged: eng
+
+CASE 6.H.1 NO SUPPORTS DURING RETREAT
+MOVE
+  Austria: F Trieste Hold
+  Austria: A Serbia Hold
+  Turkey: F Greece Hold
+  Italy: A Venice Supports A Tyrolia - Trieste
+  Italy: A Tyrolia - Trieste
+  Italy: F Ionian Sea - Greece
+  Italy: F Aegean Sea Supports F Ionian Sea - Greece
+EXPECT
+  moved: tyr, ion
+  dislodged: tri, gre
+RETREAT
+  Austria: F Trieste - Albania
+  Austria: A Serbia Supports F Trieste - Albania
+  Turkey: F Greece - Albania
+EXPECT
+  units: Austria A ser; Italy A ven; Italy A tri; Italy F gre; Italy F aeg
+
+CASE 6.H.2 NO SUPPORTS FROM RETREATING UNIT
+MOVE
+  England: A Liverpool - Edinburgh
+  England: F Yorkshire Supports A Liverpool - Edinburgh
+  England: F Norway Hold
+  Germany: A Kiel Supports A Ruhr - Holland
+  Germany: A Ruhr - Holland
+  Russia: F Edinburgh Hold
+  Russia: A Sweden Supports A Finland - Norway
+  Russia: A Finland - Norway
+  Russia: F Holland Hold
+EXPECT
+  moved: lvp, ruh, fin
+  dislodged: nwy, edi, hol
+RETREAT
+  England: F Norway - North Sea
+  Russia: F Edinburgh - North Sea
+  Russia: F Holland Supports F Edinburgh - North Sea
+EXPECT
+  units: England A edi; England F yor; Germany A kie; Germany A hol; Russia A swe; Russia A nwy
+
+CASE 6.H.3 NO CONVOY DURING RETREAT
+MOVE
+  England: F North Sea Hold
+  England: A Holland Hold
+  Germany: F Kiel Supports A Ruhr - Holland
+  Germany: A Ruhr - Holland
+EXPECT
+  moved: ruh
+  dislodged: hol
+RETREAT
+  England: A Holland - Yorkshire
+  England: F North Sea Convoys A Holland - Yorkshire
+EXPECT
+  units: England F nth; Germany F kie; Germany A hol
+
+CASE 6.H.4 NO OTHER MOVES DURING RETREAT
+MOVE
+  England: F North Sea Hold
+  England: A Holland Hold
+  Germany: F Kiel Supports A Ruhr - Holland
+  Germany: A Ruhr - Holland
+EXPECT
+  moved: ruh
+  dislodged: hol
+RETREAT
+  England: A Holland - Belgium
+  England: F North Sea - Norwegian Sea
+EXPECT
+  units: England F nth; England A bel; Germany F kie; Germany A hol
+
+CASE 6.H.5 A UNIT MAY NOT RETREAT TO THE AREA FROM WHICH IT IS ATTACKED
+MOVE
+  Russia: F Constantinople Supports F Black Sea - Ankara
+  Russia: F Black Sea - Ankara
+  Turkey: F Ankara Hold
+EXPECT
+  moved: bla
+  dislodged: ank
+  cannot-retreat: ank > bla
+RETREAT
+  Turkey: F Ankara - Black Sea
+EXPECT
+  units: Russia F con; Russia F ank
+
+CASE 6.H.6 UNIT MAY NOT RETREAT TO A CONTESTED AREA
+MOVE
+  Austria: A Budapest Supports A Trieste - Vienna
+  Austria: A Trieste - Vienna
+  Germany: A Munich - Bohemia
+  Germany: A Silesia - Bohemia
+  Italy: A Vienna Hold
+EXPECT
+  moved: tri
+  dislodged: vie
+  cannot-retreat: vie > boh
+RETREAT
+  Italy: A Vienna - Bohemia
+EXPECT
+  units: Austria A bud; Austria A vie; Germany A mun; Germany A sil
+
+CASE 6.H.7 MULTIPLE RETREAT TO SAME AREA WILL DISBAND UNITS
+MOVE
+  Austria: A Budapest Supports A Trieste - Vienna
+  Austria: A Trieste - Vienna
+  Germany: A Munich Supports A Silesia - Bohemia
+  Germany: A Silesia - Bohemia
+  Italy: A Vienna Hold
+  Italy: A Bohemia Hold
+EXPECT
+  moved: tri, sil
+  dislodged: vie, boh
+RETREAT
+  Italy: A Bohemia - Tyrolia
+  Italy: A Vienna - Tyrolia
+EXPECT
+  units: Austria A bud; Austria A vie; Germany A mun; Germany A boh
+
+CASE 6.H.8 TRIPLE RETREAT TO SAME AREA WILL DISBAND UNITS
+MOVE
+  England: A Liverpool - Edinburgh
+  England: F Yorkshire Supports A Liverpool - Edinburgh
+  England: F Norway Hold
+  Germany: A Kiel Supports A Ruhr - Holland
+  Germany: A Ruhr - Holland
+  Russia: F Edinburgh Hold
+  Russia: A Sweden Supports A Finland - Norway
+  Russia: A Finland - Norway
+  Russia: F Holland Hold
+EXPECT
+  moved: lvp, ruh, fin
+  dislodged: nwy, edi, hol
+RETREAT
+  England: F Norway - North Sea
+  Russia: F Edinburgh - North Sea
+  Russia: F Holland - North Sea
+EXPECT
+  units: England A edi; England F yor; Germany A kie; Germany A hol; Russia A swe; Russia A nwy
+
+CASE 6.H.9 DISLODGED UNIT WILL NOT MAKE ATTACKERS AREA CONTESTED
+MOVE
+  England: F Helgoland Bight - Kiel
+  England: F Denmark Supports F Helgoland Bight - Kiel
+  Germany: A Berlin - Prussia
+  Germany: F Kiel Hold
+  Germany: A Silesia Supports A Berlin - Prussia
+  Russia: A Prussia - Berlin
+EXPECT
+  moved: hel, ber
+  dislodged: kie, pru
+  can-retreat: kie > ber
+
+CASE 6.H.10 NOT RETREATING TO ATTACKER DOES NOT MEAN CONTESTED
+MOVE
+  England: A Kiel Hold
+  Germany: A Berlin - Kiel
+  Germany: A Munich Supports A Berlin - Kiel
+  Germany: A Prussia Hold
+  Russia: A Warsaw - Prussia
+  Russia: A Silesia Supports A Warsaw - Prussia
+EXPECT
+  moved: ber, war
+  dislodged: kie, pru
+RETREAT
+  England: A Kiel - Berlin
+  Germany: A Prussia - Berlin
+EXPECT
+  units: Germany A kie; Germany A mun; Germany A ber; Russia A pru; Russia A sil
+
+CASE 6.H.11 RETREAT WHEN DISLODGED BY ADJACENT CONVOY
+MOVE
+  France: A Gascony - Marseilles via convoy
+  France: A Burgundy Supports A Gascony - Marseilles
+  France: F Mid-Atlantic Ocean Convoys A Gascony - Marseilles
+  France: F Western Mediterranean Convoys A Gascony - Marseilles
+  France: F Gulf of Lyon Convoys A Gascony - Marseilles
+  Italy: A Marseilles Hold
+EXPECT
+  moved: gas
+  dislodged: mar
+  can-retreat: mar > gas
+
+CASE 6.H.12 RETREAT WHEN DISLODGED BY ADJACENT CONVOY WHILE TRYING TO DO THE SAME
+MOVE
+  England: A Liverpool - Edinburgh via convoy
+  England: F Irish Sea Convoys A Liverpool - Edinburgh
+  England: F English Channel Convoys A Liverpool - Edinburgh
+  England: F North Sea Convoys A Liverpool - Edinburgh
+  France: F Brest - English Channel
+  France: F Mid-Atlantic Ocean Supports F Brest - English Channel
+  Russia: A Edinburgh - Liverpool via convoy
+  Russia: F Norwegian Sea Convoys A Edinburgh - Liverpool
+  Russia: F North Atlantic Ocean Convoys A Edinburgh - Liverpool
+  Russia: A Clyde Supports A Edinburgh - Liverpool
+EXPECT
+  moved: bre, edi
+  dislodged: eng, lvp
+  can-retreat: lvp > edi
+
+CASE 6.H.13 NO RETREAT WITH CONVOY IN MOVEMENT PHASE
+MOVE
+  England: A Picardy Hold
+  England: F English Channel Convoys A Picardy - London
+  France: A Paris - Picardy
+  France: A Brest Supports A Paris - Picardy
+EXPECT
+  moved: par
+  dislodged: pic
+  cannot-retreat: pic > lon
+
+CASE 6.H.14 NO RETREAT WITH SUPPORT IN MOVEMENT PHASE
+MOVE
+  England: A Picardy Hold
+  England: F English Channel Supports A Picardy - Belgium
+  France: A Paris - Picardy
+  France: A Brest Supports A Paris - Picardy
+  France: A Burgundy Hold
+  Germany: A Munich Supports A Marseilles - Burgundy
+  Germany: A Marseilles - Burgundy
+EXPECT
+  moved: par, mar
+  dislodged: pic, bur
+RETREAT
+  England: A Picardy - Belgium
+  France: A Burgundy - Belgium
+EXPECT
+  units: England F eng; France A pic; France A bre; Germany A mun; Germany A bur
+
+CASE 6.H.15 NO COASTAL CRAWL IN RETREAT
+MOVE
+  England: F Portugal Hold
+  France: F Spain(sc) - Portugal
+  France: F Mid-Atlantic Ocean Supports F Spain(sc) - Portugal
+EXPECT
+  moved: spa
+  dislodged: por
+  cannot-retreat: por > spa/nc
+
+CASE 6.H.16 CONTESTED FOR BOTH COASTS
+MOVE
+  France: F Mid-Atlantic Ocean - Spain(nc)
+  France: F Gascony - Spain(nc)
+  France: F Western Mediterranean Hold
+  Italy: F Tunis Supports F Tyrrhenian Sea - Western Mediterranean
+  Italy: F Tyrrhenian Sea - Western Mediterranean
+EXPECT
+  moved: tys
+  dislodged: wes
+  cannot-retreat: wes > spa/sc
+
+CASE 6.I.1 TOO MANY BUILD ORDERS
+SETUP
+  own Germany: ber, kie, mun
+  Germany: A Ruhr
+  Germany: A Prussia
+ADJUST
+  Germany: Build A Warsaw
+  Germany: Build A Kiel
+  Germany: Build A Munich
+EXPECT
+  units: Germany A ruh; Germany A pru; Germany A kie
+
+CASE 6.I.2 FLEETS CANNOT BE BUILD IN LAND AREAS
+SETUP
+  own Russia: mos
+ADJUST
+  Russia: Build F Moscow
+EXPECT
+  units: -
+
+CASE 6.I.3 SUPPLY CENTER MUST BE EMPTY FOR BUILDING
+SETUP
+  own Germany: ber, kie
+  Germany: A Berlin
+ADJUST
+  Germany: Build A Berlin
+EXPECT
+  units: Germany A ber
+
+CASE 6.I.4 BOTH COASTS MUST BE EMPTY FOR BUILDING
+SETUP
+  own Russia: stp, mos
+  Russia: F St Petersburg(sc)
+ADJUST
+  Russia: Build A St Petersburg(nc)
+EXPECT
+  units: Russia F stp/sc
+
+CASE 6.I.5 BUILDING IN HOME SUPPLY CENTER THAT IS NOT OWNED
+SETUP
+  own Russia: ber
+  own Germany: kie, mun, hol
+  Germany: A Kiel
+  Germany: A Munich
+ADJUST
+  Germany: Build A Berlin
+EXPECT
+  units: Germany A kie; Germany A mun
+
+CASE 6.I.6 BUILDING IN OWNED SUPPLY CENTER THAT IS NOT A HOME SUPPLY CENTER
+SETUP
+  own Germany: war, kie
+  Germany: A Kiel
+ADJUST
+  Germany: Build A Warsaw
+EXPECT
+  units: Germany A kie
+
+CASE 6.I.7 ONLY ONE BUILD IN A HOME SUPPLY CENTER
+SETUP
+  own Russia: mos, sev, war
+  Russia: A Ukraine
+ADJUST
+  Russia: Build A Moscow
+  Russia: Build A Moscow
+EXPECT
+  units: Russia A ukr; Russia A mos
+
+CASE 6.J.1 TOO MANY DISBAND ORDERS
+SETUP
+  own France: par
+  France: A Paris
+  France: A Picardy
+ADJUST
+  France: Remove F Gulf of Lyon
+  France: Remove A Picardy
+  France: Remove A Paris
+EXPECT
+  units: France A par
+
+CASE 6.J.2 REMOVING THE SAME UNIT TWICE
+# The DATC only says France has an army in Paris and must disband two. Burgundy and
+# Picardy are added here; both are one step from Paris, so Burgundy goes (alphabetical).
+SETUP
+  own France: par
+  France: A Paris
+  France: A Picardy
+  France: A Burgundy
+ADJUST
+  France: Remove A Paris
+  France: Remove A Paris
+EXPECT
+  units: France A pic
+
+CASE 6.J.3 CIVIL DISORDER TWO ARMIES WITH DIFFERENT DISTANCE
+SETUP
+  own Russia: stp
+  Russia: A Livonia
+  Russia: A Sweden
+ADJUST
+EXPECT
+  units: Russia A lvn
+
+CASE 6.J.4 CIVIL DISORDER TWO ARMIES WITH EQUAL DISTANCE
+SETUP
+  own Russia: mos
+  Russia: A Livonia
+  Russia: A Ukraine
+ADJUST
+EXPECT
+  units: Russia A ukr
+
+CASE 6.J.5 CIVIL DISORDER TWO FLEETS WITH DIFFERENT DISTANCE
+SETUP
+  own Russia: stp
+  Russia: F Skagerrak
+  Russia: F Berlin
+ADJUST
+EXPECT
+  units: Russia F ska
+
+CASE 6.J.6 CIVIL DISORDER TWO FLEETS WITH EQUAL DISTANCE
+SETUP
+  own Russia: mun
+  Russia: F Gulf of Bothnia
+  Russia: F North Sea
+ADJUST
+EXPECT
+  units: Russia F nth
+
+CASE 6.J.7 CIVIL DISORDER TWO FLEETS AND ARMY WITH EQUAL DISTANCE
+SETUP
+  own Russia: stp, war
+  Russia: A Bohemia
+  Russia: F Skagerrak
+  Russia: F North Sea
+ADJUST
+EXPECT
+  units: Russia A boh; Russia F ska
+
+CASE 6.J.8 CIVIL DISORDER A FLEET WITH SHORTER DISTANCE THEN THE ARMY
+SETUP
+  own Russia: war
+  Russia: A Tyrolia
+  Russia: F Baltic Sea
+ADJUST
+EXPECT
+  units: Russia F bal
+
+CASE 6.J.9 CIVIL DISORDER MUST BE COUNTED FROM BOTH COASTS
+SETUP
+  own Russia: stp, sev
+  Russia: A Greece
+  Russia: A Sevastopol
+  Russia: F Baltic Sea
+ADJUST
+EXPECT
+  units: Russia A sev; Russia F bal
+
+CASE 6.J.9b CIVIL DISORDER MUST BE COUNTED FROM BOTH COASTS (SECOND SITUATION)
+SETUP
+  own Russia: stp, sev
+  Russia: A Greece
+  Russia: A Sevastopol
+  Russia: F Skagerrak
+ADJUST
+EXPECT
+  units: Russia A sev; Russia F ska
+
+CASE 6.J.10 CIVIL DISORDER COUNTING CONVOYING DISTANCE
+SETUP
+  own Italy: nap
+  Italy: A Greece
+  Italy: A Piedmont
+ADJUST
+EXPECT
+  units: Italy A gre
+
+CASE 6.J.11 DISTANCE TO OWNED SUPPLY CENTER
+SETUP
+  own Italy: war
+  Italy: A Warsaw
+  Italy: A Tuscany
+ADJUST
+EXPECT
+  units: Italy A war

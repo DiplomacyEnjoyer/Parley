@@ -1,0 +1,7 @@
+bin/
+obj/
+third_party/*
+!third_party/README.md
+*.user
+.vs/
+out/
