@@ -22,6 +22,8 @@ public sealed class MapInfo
     public MapData Map;
     public string Pmap = "";
     public object Json;
+    public SvgArt.Art Art;
+    public string File = "";
 }
 
 public sealed class WebGame
@@ -59,7 +61,14 @@ public sealed class Lobby
                 var text = File.ReadAllText(file);
                 var map = new MapData();
                 if (!map.Load(text)) { Console.WriteLine($"skipping {file}: {map.error}"); continue; }
-                Maps[map.mapId] = new MapInfo { Map = map, Pmap = text, Json = Views.MapJson(map) };
+                // a picture of the board, if one was imported next to the map (see scripts/fetch-reference-maps.sh)
+                SvgArt.Art art = null;
+                string artFile = Path.ChangeExtension(file, ".art.json");
+                if (System.IO.File.Exists(artFile))
+                {
+                    try { art = SvgArt.Read(artFile); } catch (Exception ex) { Console.WriteLine($"ignoring {artFile}: {ex.Message}"); }
+                }
+                Maps[map.mapId] = new MapInfo { Map = map, Pmap = text, Art = art, File = file, Json = Views.MapJson(map, art) };
             }
         }
         foreach (var file in Directory.GetFiles(dataDir, "*.json"))

@@ -6,48 +6,41 @@ blocks further work.
 
 ---
 
-## 1. Working title: "Parley"
+## 1. Working title: "Parley" (owner: keep it)
 
 A parley is a talk between enemies under truce, which is what the side rooms are for.
-It is short and easy to say in voice chat. It is only a working title: it appears in
-the folder names, the code namespace (`Parley.Engine`) and the `.pmap` file extension,
-and can be changed with a search-and-replace.
+It is short and easy to say in voice chat. **The owner decided the working title stays
+"Parley".** It appears in the folder names, the code namespace (`Parley.Engine`) and the
+`.pmap` file extension. Before publishing, a trademark search is still sensible:
+"Parley" is a common word and other products use it.
 
-*Alternatives:* Concordat, Entente, Pactbreaker, Accord.
-**YOUR CALL:** pick the real name and do a trademark search before publishing. "Parley"
-is a common word and other products use it.
+## 2. The classic board is the default map, fetched at setup time (owner's decision)
 
-## 2. The classic board and "1900" are not in this repository
+**Owner's decision (second session):** the classic board must be the default map,
+because the theme is part of why people play. It is not authored or drawn here; it is
+taken at setup time from existing open-source fan projects, the same way the rule tests
+already got their data. The owner accepts the low risk of using fan-distributed maps for now.
 
-**This is the one place I did not do what you asked.** You asked me to ship the standard
-map and, if licensing allowed, the 1900 variant. I have not written out either one.
+How it works:
 
-Why: I don't build a recreation of a specific existing game's board, even under a new
-name. The rules of the game are mechanics and I implemented them fully (and verified
-them against the DATC). The classic board itself, with its particular provinces, powers
-and starting positions, is the specific design of the published game, and 1900 is one
-person's specific redesign of it. That is a limit on what I will author, not a legal
-opinion. For what it is worth on the legal side: rules are not protected by copyright;
-the name and official artwork are; the province layout sits in a grey area that the
-rights holder has tolerated in many fan projects for decades, but "tolerated" is not
-"licensed". 1900 has no open licence that I could find, so I would have flagged it
-anyway.
+- `scripts/fetch-reference-maps.sh` downloads the Python `diplomacy` package from PyPI,
+  copies its DPjudge-format map files and its board pictures (SVG) into `third_party/`,
+  converts the classic board (plus Modern and Ancient Mediterranean, which also have
+  pictures) into `maps-local/*.pmap`, and matches each picture to the map province by
+  province into `maps-local/*.art.json` (decision 17).
+- The web client loads everything in `maps-local/` and preselects "Standard" when it is
+  there. Without the script, only the generated Ring test maps are offered.
+- Nothing downloaded or converted is committed. Licence status of each source:
+  `THIRD_PARTY.md`.
+- The Ring maps (decision 12) are kept as **test maps only**, not launch maps.
 
-What you get instead:
+*Earlier position (first session), kept for the record:* I had declined to write out the
+classic board myself, and still do not author or draw it; the fetch-at-setup approach
+uses other people's existing published files instead.
 
-- **Original maps** ("Ring" maps, decision 12) that the game ships with.
-- **An importer** for the most widely used community map format (decision 5). If you
-  decide to play the classic board or any community variant, you can convert the files
-  that existing open-source projects already publish. `scripts/fetch-reference-maps.sh`
-  downloads 14 such maps (classic, Modern, Ancient Mediterranean, Colonial, World with
-  17 powers, and more) into a git-ignored folder, and `parley import-dpjudge` converts
-  them. That is your decision to make and takes two commands; see README.
-- **The rules are still verified on the classic board.** The DATC test suite is written
-  for it, so the tests load its connection data from that downloaded folder at test
-  time. Nothing from it is committed.
-
-Consequence: a fresh clone needs `scripts/fetch-reference-maps.sh` (internet) once
-before the DATC tests can run.
+What remains open: publishing a VRChat world containing the classic picture would
+redistribute GPL artwork (THIRD_PARTY.md suggests options). The 1900 variant: see
+`docs/variants-research.md` (when written).
 
 ## 3. Engine architecture: one codebase, written in the UdonSharp subset
 
@@ -200,7 +193,8 @@ other engine follows the older preference and lets it walk instead. No other
 disagreement was found. Re-run with `parley crosscheck-export` and
 `scripts/crosscheck.py`.
 
-**YOUR CALL (small):** that "no walking fallback" rule can surprise players. In VR the
+**Owner's decision: keep the newest DATC ruling** (no walking fallback). Background:
+that rule can surprise players. In VR the
 panel makes the choice explicit (move over land / move by convoy), so it should rarely
 bite. If you would rather have the older, more forgiving behaviour, it is a few lines
 in `Adjudicator.PrepareOrders`, at the cost of four DATC cases (6.G.8, 6.G.11, 6.G.20
@@ -247,8 +241,13 @@ size budget (`maxArchiveChars`): when it is exceeded, the oldest phases' *orders
 forgotten first, then the oldest positions. The current position is never dropped.
 Suggested budget in VRChat: 60,000 characters.
 
-**YOUR CALL:** who may trigger a roll-back or a resume (host only, or majority vote)?
-The engine supports either; the world UI will need the rule.
+**Owner's decision: resume and roll-back are host only, no voting.** Every client keeps
+the save, so a dropped host never loses the game: in VR each player's PlayerData holds the
+archive; in the web client every browser keeps a copy of the archive in its local storage
+and offers "Resume it here" if a server has lost the game, and the host role passes to
+another player when the host's browser goes away (decision 22). A player who leaves: their
+units stand still (they hold, and can be attacked like anyone's), and someone else can
+take over the seat.
 
 ## 9. Game code format
 
@@ -280,28 +279,27 @@ orders reproduces the stored position exactly.
 A code names its map but does not contain it. The world (or web server) must have that
 map installed.
 
-## 10. Secret orders (design for the networking phase; not built)
+## 10. Secret orders: tamper-proof (owner's decision) — see decision 18
 
-The flow engine takes each power's orders as a text string and guarantees a string can
-only affect that power's own units. How those strings travel between headsets is for
-the Unity phase. Recommended: each player's orders stay on their own client until
-lock-in; at lock-in the client publishes only a fingerprint of them; when everyone has
-locked (or time is up) all clients reveal, every client checks the reveals against the
-fingerprints and resolves the phase itself. Since the engine is fully deterministic,
-all clients reach the same result, and nobody, including the instance owner, can peek
-or change orders after seeing others'. Simpler alternative: send orders to the instance
-owner privately; then the owner's client could cheat. **YOUR CALL** later.
+The owner chose **tamper-proof, not trust-the-host**: nobody's machine, the host's
+included, sees anyone else's orders until all are locked in. Built as commit-and-reveal
+with salted SHA-256 seals; full design and edge cases in decision 18.
 
 ## 11. Game flow choices
 
+See decisions 18 to 21 for the turn flow the owner designed (timer schedule, submit
+toggle, sealing, announcement, ready-up, pause). Other choices:
+
 - A seat is tied to the player's display name. Leaving keeps the seat; returning under
-  the same name gets it back; an abandoned seat can be taken over by someone else.
-- A phase resolves when every seated player who is present and has something to decide
-  has locked in, or when the timer runs out. Absent players do not hold up the game
-  (switchable: `waitForAbsent`). Their units hold; missing disbands follow the standard rule.
+  the same name gets it back; an abandoned seat can be taken over by someone else. A
+  newcomer taking over mid-phase starts the sheet afresh (they could not open the
+  previous player's seal anyway).
+- A player who has left is not waited for (switchable: `waitForAbsent`, for slow
+  play-by-Discord games). Their units hold; missing disbands follow the standard rule.
 - Powers nobody claimed simply hold (so 5 people can play a 7-power map).
-- Timers are per phase type (negotiation/movement, retreats, builds), 0 = no limit,
-  and are saved in the archive.
+- If the clock runs out while nobody at all is present, the game pauses instead of
+  playing on in an empty room.
+- A retreat or build phase in which nobody present has a decision moves straight on.
 - After a resume or roll-back the game is paused with a full clock.
 - Draw: ends the game when every surviving seated player votes for it. Votes reset each phase.
 - The flow never reads a clock; the caller passes the time in. That makes it testable
@@ -323,8 +321,8 @@ draw properly in the web client and give the VR board real shapes to build from.
 This is a first map, built to be fair and to exercise every rule. Whether it is *fun*
 needs human play. Bot results: decision 13.
 
-**YOUR CALL:** map design is yours. The format is easy to write by hand, and a
-hand-drawn original map would give the game more character than a generated ring.
+**Owner's decision:** the Ring maps stay as **test maps only**, not launch maps. The
+classic board is the default (decision 2).
 
 ## 13. Bots are test equipment, not opponents
 
@@ -353,7 +351,9 @@ Things to be aware of (not legal advice):
    (MPL code, CC BY-SA art) you would be granting VRChat rights on their behalf.
    MPL and CC BY-SA both allow anyone to use and distribute, but VRChat's terms are
    worded more broadly than either. Common fix: a short contributor agreement or a line
-   in CONTRIBUTING saying contributions may be uploaded to VRChat. **YOUR CALL.**
+   in CONTRIBUTING saying contributions may be uploaded to VRChat. **Owner: not needed
+   yet.** Revisit before accepting outside contributions to anything that goes into the
+   uploaded world.
 2. **CC BY-SA and the scripted intro.** Music and voice under CC BY-SA require credit
    to be shown somewhere in the world; plan a credits board.
 3. **UdonVoiceUtils** (for the private rooms): licence and Quest support not verified
@@ -373,19 +373,154 @@ For playing over Discord before VR exists. Details and instructions: `web/README
   have to collect everyone's secret orders manually each turn.
 - **Order entry copies the VR tap sequence** (unit, order type, target; only legal
   options offered). So playing here also tests the option generator the VR panel will use.
-- **The host is trusted.** Players never receive each other's orders before a phase
-  resolves, but whoever runs the server could read the saved files. Fine among friends.
+- **The server is not trusted with orders** (second session). Each browser keeps its
+  sheet in its own storage and sends only a seal; the server learns the orders when every
+  seal is frozen, exactly as in VR (decision 18).
 - **Hosting is on you.** Run it on your PC and share it through a free tunnel, or use
   the Dockerfile on any small server. The Dockerfile is written but untested.
-- **Imported maps have no pictures.** They are drawn as dots and lines by an automatic
-  layout. Good enough to test a variant's rules and balance; not pretty.
+- **Imported maps with a picture** (classic, Modern, Ancient Mediterranean) draw the
+  real board; the rest are drawn as dots and lines by an automatic layout.
 - Tested with an automated three-browser play-through (join, take seats, enter orders
   by clicking, lock in, resolve, view history, reload, resume from a code). Not yet
   played by humans.
 
-## 16. No remote repository
+## 16. Repository
 
-There was no GitHub repository connected to this session and no working login, so
-nothing could be pushed. All work is committed locally in `/home/user/parley` and was
-sent to you as an archive in the chat at each milestone, because the machine it was
-built on is temporary. **First thing to do: create a repository and push this.**
+The project lives at github.com/DiplomacyEnjoyer/Parley; work is pushed to `main` in
+small steps. The leftover `initial-engine` branch is fully contained in `main` and
+should be deleted, but this session's GitHub access was refused the deletion (HTTP 403
+on `git push --delete`). Delete it from the GitHub web page (Branches, bin icon).
+
+## 17. Classic board picture: the Python package's SVG
+
+Candidates were the Python `diplomacy` package (`maps/svg/`), godip's classical variant,
+and jDip's variant packs. **Chosen: the Python package's `standard.svg`**, because:
+
+- it comes from the same package as the map data we already import, so province names
+  match one to one (five sea areas use alternative names, resolved through the map
+  file's own alias list);
+- it is a clean SVG with a separate clickable outline per province, unit positions for
+  every province and coast, label text and supply-centre markers: exactly what a board
+  needs;
+- it downloads from PyPI, which works where GitHub does not (this machine could not
+  reach github.com; godip is reachable through the Go module proxy, jDip through
+  SourceForge, both checked).
+
+It is jDip's artwork (GPL), so the same file family covers jDip. The package also has
+pictures for Modern and Ancient Mediterranean, which are installed too.
+
+The converter (`parley import-svg`, `tools/Parley.Tools/SvgArt.cs`) keeps only plain
+shapes and text, because the markup ends up inside the web page: no scripts, links,
+images, styles or event handlers survive, and a test checks this.
+
+## 18. Tamper-proof secret orders: commit and reveal
+
+**The problem.** Orders are secret until everyone is done. If any one machine (the
+instance owner's, a server) collects them, its owner can peek or change them.
+
+**The design.**
+
+1. While the clock runs, each player's sheet exists only on their own device.
+2. Flipping **submit on** publishes a *seal*: SHA-256 of
+   `PS1|salt|power|phaseKey|orders`. The salt is 32 random hex digits that never leave the
+   device until step 4; `phaseKey` ties the seal to this exact position, so it cannot be
+   replayed in another phase or game. Flipping submit off withdraws the seal.
+3. When everyone present has submitted, or the clock runs out, seals are **frozen**.
+4. Only then does each device publish its salt and orders ("opening"). Every device
+   checks each opening against the frozen seal; a mismatch is refused. Because the seal
+   was published before anyone's orders were visible, nobody can adapt their orders to
+   anybody else's.
+5. All devices resolve the phase themselves (the engine is deterministic) and keep the
+   seals, salts and sheets, so anyone can re-check afterwards.
+
+**What UdonSharp can use for hashing.** Udon does not expose .NET's cryptography
+classes to world scripts, so hashing must be written in Udon itself; the community
+library UdonHashLib (MIT) does exactly that, which confirms it works. (I could not read
+VRChat's own documentation from this machine; this is from the library and earlier
+research, to be confirmed at the first Unity import.) Parley has its own SHA-256 in
+`OrderSeal.cs`, written to the engine's subset: it keeps each 32-bit word as two 16-bit
+halves in ordinary `int`s, so nothing depends on integer overflow behaviour, which is
+the riskiest thing to assume in Udon. Tested against published test vectors and against
+.NET's SHA-256 on every length from 0 to 200 characters and on non-English text. The web
+client uses a plain-JavaScript SHA-256 with the same input format.
+
+*Speed:* a seal hashes about 100 characters; tens of thousands of times faster than
+anything a player would notice even at Udon's speed.
+
+**Edge cases.**
+
+| Situation | What happens |
+|---|---|
+| Timer reaches zero, some players never flipped submit | Stage CLOSING: every device seals whatever is on its sheet automatically (5 seconds in VR, 10 in the web client, which polls). Units with nothing entered hold. |
+| A device never seals (frozen headset) | After the grace period seals are frozen without it; that power's units hold; the announcement says "No orders received". |
+| Disconnect between sealing and opening | Opening waits up to 20 seconds (`revealSeconds`) for players who are still present; players who have left are not waited for. Unopened seals are **not** used: those units hold, and the announcement says "Sealed orders were never opened". Rationale: nobody else can open the seal, and waiting indefinitely would let one player stall everyone. |
+| The player comes back in time | Their device still has salt and sheet, and opens normally. |
+| Somebody takes over the seat mid-phase | The old seal is discarded; the newcomer starts a fresh sheet. |
+| Someone tries to open different orders | Refused ("these orders do not match the seal"); after the window their units hold. |
+| Host override | The host can end any waiting stage early ("End the phase now", "Stop waiting for sheets"). This cannot reveal or change anyone's orders. |
+
+*Alternative considered:* trust the instance owner (simpler; rejected by the owner).
+
+## 19. Timer schedule
+
+Movement (negotiation) phases follow a schedule: **30 minutes for the first two, then
+15 minutes**, as the owner described. The schedule is a list (`GameFlow.SetMoveSchedule`)
+whose last entry repeats, saved in the game archive so a resumed game keeps its pace,
+and editable by the host in the web client ("30, 30, 15"). The archive format changed
+to store it; old `PA1` archives with a single number still load.
+
+Retreat and build phases: **2 minutes for retreats, 3 for builds.** They involve no
+negotiation; 2 minutes is enough to pick a retreat from a short list, and builds
+sometimes need a word with an ally about which unit to build where. Both are settings.
+A retreat or build phase in which nobody present has anything to decide ends at once.
+
+## 20. End of phase, announcement, adjudication, ready-up
+
+As the owner described:
+
+- **End of phase** (everyone submitted, or zero): the world plays the end-of-round
+  sound (sound to be chosen; the web client plays a placeholder chime), then a short
+  pause (`announceLeadSeconds`, 3 s).
+- **Announcement**: the engine's `Announcement` lists every order grouped **country by
+  country** (in the map's power order), with the text the announcer reads (for example
+  "Army Paris moves to Burgundy"), the unit's starting place and the **intended
+  destination** (known before any result, so two pieces ordered to the same place both
+  head there), plus each power's hand-in status. Timing: 1.5 s to name a country, 3 s per
+  order, then 6 s of results; every device computes the same reading position from the
+  same clock (`GameFlow.LocateAnnouncement`). In a 7-player opening (22 units) that is
+  about 1 minute 30; it can be set to "fast" or "off".
+- **Adjudication** runs instantly; the result (moved, bounced, cut, dislodged) is in the
+  same list, plus every contested province with how many units went for it and how many
+  supports counted, for the battle effects.
+- **Ready-up**: before each negotiation clock starts, everyone present must press Ready.
+  The host can start the clock anyway (for someone who stepped away). Players who have
+  left are not waited for. The web client lets the game creator switch ready-up off.
+
+## 21. Pausing — OPEN QUESTION for the owner
+
+Built: **the host can pause and resume** the clock. While paused, players can still work
+on their sheets and flip submit, but nothing ends early.
+
+The worry: a conspiring majority could use any vote-to-pause to buy time. Alternatives:
+
+1. **Host only, honour system** (built). Simple; relies on the host being fair.
+2. **Anyone can pause, anyone can resume.** The victim of a stalling tactic can simply resume.
+3. **Pause budget**: each player gets, say, 5 minutes of pause per game; the clock
+   shows whose pause it is. Self-limiting, visible.
+4. **Unanimous pause**: needs everyone present to agree. Cannot be abused by a majority,
+   but one player can refuse a genuine bathroom break.
+5. **Capped automatic pause**: a pause lasts at most N minutes, then the clock resumes by itself.
+6. **Pause adds nothing**: pausing stops the clock but also locks every sheet, so nobody
+   can use the time to negotiate or plan.
+
+My suggestion when you decide: 2 or 3 combined with 5 (anyone can pause, it ends by
+itself after a few minutes, and it is visible who paused).
+
+## 22. Web client: host handover and every browser keeps the save
+
+If the host's browser has not checked in for 45 seconds (`PARLEY_AWAY_SECONDS`), the host
+role passes to the present player who joined earliest (seated players first). Every
+browser keeps the whole archive in its local storage after each phase; if a server
+loses the game (or it is opened on another server), the page offers "Resume it here".
+The private order sheet lives only in the browser it was written in; a player switching
+devices mid-phase starts that phase's sheet again on the new device.

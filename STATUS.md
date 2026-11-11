@@ -1,97 +1,82 @@
 # Status
 
-*Last updated at the end of the first overnight session.*
+*Last updated during the second session (turn flow, sealed orders, classic map).*
 
 ## Read this first
 
-1. **Nothing is pushed anywhere.** No GitHub repository was connected, so the work is
-   committed only on the temporary machine it was built on, and was sent to you in the
-   chat as an archive file (`parley-*.zip` / `.bundle`). Save that file. Then create a
-   repository and push (the `.bundle` file is a complete git history you can clone from).
-2. **I did not write out the classic board or the 1900 variant.** The rules are fully
-   implemented and verified; the game ships with original maps; and an importer converts
-   community map files if you choose to use them. Reasons and details: DECISIONS.md §2.
-3. **Nothing has been compiled inside Unity/VRChat yet.** The engine is written to
-   UdonSharp's restrictions and a test enforces them, but I had no Unity here and could
-   not open VRChat's documentation site. Expect small fixes at first import.
+1. **The classic board is now the default map.** Run `./scripts/fetch-reference-maps.sh`
+   once; it downloads the map and its picture from the open-source Python `diplomacy`
+   package and installs them. Step by step: README, "Getting the classic map working".
+   Nothing downloaded is committed; licences in THIRD_PARTY.md.
+2. **The turn flow is your design**: timer schedule (30, 30, then 15 minutes), private
+   order sheet, submit toggle, early finish, automatic hand-in at zero, host pause,
+   end-of-round sound, announcement country by country, instant adjudication, ready-up.
+   Built in the engine and playable in the web client.
+3. **Secret orders are tamper-proof.** Sheets never leave a player's device until every
+   sheet is sealed (SHA-256 commit and reveal). The web server cannot see orders early either.
+4. **One thing for you to do by hand:** delete the old `initial-engine` branch on GitHub
+   (Branches page, bin icon). It is fully merged into `main`; this session was not
+   allowed to delete branches.
+5. **One open question:** how pausing should work in the end (DECISIONS §21).
 
 ## Done and tested
 
 | Piece | State | How it is tested |
 |---|---|---|
-| Map format, any map / any player count | Done | Loads 11 original maps and 14 imported community maps; 2 to 70 powers |
-| Rules engine (moves, supports, convoys and paradoxes, retreats, builds, forced disbands, ownership, victory, draw) | Done | **DATC v3.0: all 164 cases pass** (165 checks). Cross-checked against an independent engine on 20,000 random situations: identical except one documented rule-edition difference (DECISIONS §7) |
-| Map importer (DPjudge `.map` format) | Done | All 14 reference maps convert, load and play |
-| Game codes and full-history archive | Done | Round-trip, damage detection, wrong-map detection, size budget |
-| Legal-option generation for the tap panel | Done | "Options offered = orders the referee accepts", checked on thousands of orders across 4 maps |
-| Game flow (seats, hand-in, lock-in, timer, pause, drop/rejoin, draw, resume, roll-back) | Done | 9 scenario tests |
-| Bot simulation with per-phase checks | Done | Thousands of games, 2 to 34 players, original and imported maps; no failures |
-| UdonSharp-subset guard | Done | Test reads the engine source and rejects anything outside the subset |
-| Web client (flat map, tap order entry, secret orders, history, roll-back, save/resume) | Working; not yet played by humans | Automated three-browser play-through; see `web/README.md` |
+| Map format, any map / any player count | Done | 11 generated maps and 14 imported community maps; 2 to 70 powers |
+| Rules engine | Done | **DATC v3.0: all 164 cases pass.** Cross-checked against the Python engine on 20,000 random movement situations (DECISIONS §7) |
+| Map importer (DPjudge `.map`) | Done | All 14 reference maps convert, load and play |
+| Classic board picture in the web client | Done | `parley import-svg` matches the picture to the map; classic, Modern, Ancient Mediterranean all match 100%; test checks coverage and that no unsafe markup survives |
+| Game codes and full-history archive | Done | Round-trip, damage detection; archive now stores the timer schedule |
+| Legal-option generation | Done | "Options offered = orders the referee accepts", thousands of orders, 4 maps |
+| Turn flow (schedule, submit toggle, early finish, auto hand-in, pause, announcement, ready-up) | Done | `TurnFlowTests`: 21 scenarios including every sealed-order edge case |
+| Sealed orders (`OrderSeal`, SHA-256 in the UdonSharp subset) | Done | Test vectors; matches .NET SHA-256 on 200+ inputs; cheating attempts refused |
+| Announcement data (orders by country, intended moves, results, battles) | Done | Movement, retreat and build phases |
+| Web client on the new flow | Working | Three-browser smoke test of a full sealed turn. Full automated playtest suite: in progress (see Next steps) |
+| UdonSharp-subset guard | Done | Covers the new engine files too |
 
-Test count: see the last line of `dotnet test`.
+Test count: 270 (`dotnet test`, after running the fetch script).
 
-## Numbers worth knowing
+## Decisions you made this session (recorded in DECISIONS.md)
 
-- Resolving one phase: about 25 microseconds on a classic-size board, 100 microseconds
-  with 17 powers (desktop .NET). Udon on Quest will be several hundred times slower:
-  probably tens of milliseconds. Needs measuring in a real world.
-- Game code length: about 90 characters (3 players), 145 (classic-size), 350 (17 players).
-- Full game archive: 30 to 50 KB for a typical 7-player game; a 17-player 40-year game
-  hit 102 KB, over VRChat's 100 KB per-player storage, so the flow has a size budget
-  that forgets the oldest orders first (DECISIONS.md §8).
-- Bot balance, Ring of 5, 300 games: each identical realm won 16% to 25% (that spread
-  is noise). Classic board, 400 games: the simple bot wins 41% as France and 1% as
-  England because it rarely convoys. Bot numbers compare seats; they do not predict
-  human play (DECISIONS.md §13).
+Classic map default, fetched at setup (§2); resume and roll-back host only, every client
+keeps the save (§8); tamper-proof orders (§10, §18); newest DATC convoy ruling (§7);
+name stays "Parley" (§1); contributor terms not needed yet (§14); Ring maps are test
+maps only (§12).
 
-## Decisions waiting for you (none block work)
+## Next steps, in your priority order
 
-1. The real name (DECISIONS §1).
-2. Whether to use the importer for the classic board / community variants, and which
-   variants have licences you are comfortable with (§2, §5).
-3. Who may trigger resume and roll-back: host only, or a vote (§8).
-4. Secret-order networking: commit-and-reveal (nobody can cheat) or trust the instance
-   owner (simpler) (§10).
-5. Contributor terms so other people's contributions can be uploaded to VRChat (§14).
-6. Map design: keep the generated Ring maps as the launch maps, or draw an original
-   map by hand (§12).
-7. Keep the strict "an army ordered to convoy next door does not walk if the convoy
-   fails" rule, or use the older forgiving one (§7).
+- [x] Step 0: build and tests pass. Branch deletion blocked (see above).
+- [x] Classic map data and art, default in the web client, README steps, THIRD_PARTY.md.
+- [x] Turn flow and tamper-proof orders (engine and web client).
+- [x] VR design notes: `docs/vr-world-design.md`.
+- [ ] **Automated playtesting through the web client** (in progress): multi-player games
+      covering timers expiring with partial orders, early finish, submit on/off, pause and
+      resume, ready-up, players dropping and rejoining, host dropping, resuming from a
+      code, roll-back, and the sealed exchange; on the classic map and imported variants.
+      Planned file: `web/e2e/playtest.js`.
+- [ ] Variant research (`docs/variants-research.md`), then importers for the shortlist.
+- [ ] Cross-check against godip / jDip; extend cross-checks to retreat and build phases.
+- [ ] Try building the Dockerfile.
 
-## Next steps
+Unity/VRChat phase (unchanged; see docs/vr-world-design.md for the owner's design):
 
-Still in the "no Unity needed" phase:
-
-- [ ] Second importer: jDip XML (many classic-era variants). Then webDiplomacy/vDiplomacy.
-- [ ] Extend the cross-check (`scripts/crosscheck.py`) to retreat and build phases;
-      so far it covers movement phases only.
-- [ ] Try the Dockerfile (written, never built).
-- [ ] Human playtest of the web client; fix what friends trip over.
-- [ ] A stronger bot (convoys, defence) so balance numbers mean more.
-
-Unity/VRChat phase:
-
-- [ ] Import the engine into a Unity project with the VRChat SDK and get it compiling
-      under UdonSharp. Measure map loading and phase resolution on a Quest 3S.
-- [ ] Board: build province meshes from the `shape` data; wall or tilted table at eye level.
-- [ ] Order panel: unit, order type, target; large tap targets for hand tracking.
-- [ ] Network sync of the archive; PlayerData persistence and "resume" flow (§8).
-- [ ] Secret-order exchange (§10).
-- [ ] Private audio rooms (check UdonVoiceUtils on Quest, and its licence).
-- [ ] Intro sequence, music, announcer (original or CC-licensed; credits board).
+- [ ] Import the engine into Unity with the VRChat SDK; get it compiling under UdonSharp;
+      confirm that hand-written SHA-256 runs (DECISIONS §18); measure speed on Quest.
+- [ ] Board, order sheet with hand tracking, clock, announcer, network sync of seals, PlayerData saves.
 
 ## Notes for whoever continues this (human or another model)
 
 - The engine must stay inside the subset listed in DECISIONS §3. `UdonSubsetTests` will
   tell you when you step outside. Put anything fancy in `tools/`.
 - Engine classes are never created with `new` inside the engine: in Unity they are
-  components wired in the scene. `tools/Parley.Tools/Game.cs` shows the wiring.
-- Game codes must stay canonical (same position, same text). `Simulator.Verify` checks
-  this plus save/load and replay after every simulated phase; run `parley sim` on a few
-  maps after touching the adjudicator or codec.
-- If the code or archive format changes, bump `P1` / `PA1` so old saves are refused
-  with a clear message rather than misread.
-- DATC expectations are generated into `tests/datc/datc_v3.0.txt`; the file is the
-  source of truth now. Each `EXPECT` uses exact sets, so a rule change shows up at once.
-- The reference maps in `third_party/` are other people's work; never commit them.
+  components wired in the scene. `tools/Parley.Tools/Game.cs` shows the wiring
+  (GameFlow now also needs an `OrderSeal` and an `Announcement`).
+- `tools/Parley.Tools/SealedDevice.cs` plays one well-behaved device in sealed-order tests.
+- Game codes must stay canonical. Run `parley sim` on a few maps after touching the
+  adjudicator or codec.
+- If the code or archive format changes incompatibly, bump `P1` / `PA1`.
+- The fetched maps and pictures in `third_party/` and `maps-local/` are other people's
+  work; never commit them (git ignores both folders).
+- Web server for testing: `PARLEY_DATA` (save folder), `PARLEY_URL`, `PARLEY_AWAY_SECONDS`
+  (how fast a silent browser counts as away; set low in automated tests).

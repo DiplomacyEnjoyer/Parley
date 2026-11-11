@@ -339,8 +339,8 @@ function el(tag, attrs, parent, text) {
 }
 function provShape(p, cls, parent, extra) {
   const a = Object.assign({ class: cls }, extra || {});
+  if (p.svg) { const g = el("g", a, parent); g.innerHTML = p.svg; return g; }
   if (p.pts) return el("polygon", Object.assign(a, { points: p.pts }), parent);
-  if (p.path) return el("path", Object.assign(a, { d: p.path }), parent);
   return el("circle", Object.assign(a, { cx: p.x, cy: p.y, r: 24 }), parent);
 }
 const powerColor = i => i >= 0 && i < M.powers.length ? M.powers[i].color : "#999";
@@ -387,7 +387,9 @@ function drawBoard() {
     const owner = st.owners[i];
     if (owner >= 0 && p.type !== 2) provShape(p, "", svg, { fill: powerColor(owner), "fill-opacity": M.art ? .45 : .32, "pointer-events": "none", stroke: "none" });
   });
+  if (M.labels) { const g = el("g", { "pointer-events": "none" }, svg); g.innerHTML = M.labels; }
   M.provs.forEach((p, i) => {
+    if (p.sc && M.art && p.scx >= 0) el("circle", { cx: p.scx, cy: p.scy, r: 7, fill: st.owners[i] >= 0 ? powerColor(st.owners[i]) : "#fff", stroke: "#222", "stroke-width": 2, "pointer-events": "none" }, svg);
     if (p.sc && !M.art) el("rect", { x: p.x - 4, y: p.y + 13, width: 8, height: 8, fill: st.owners[i] >= 0 ? powerColor(st.owners[i]) : "#fff", stroke: "#333", "stroke-width": 1.2, "pointer-events": "none", transform: `rotate(45 ${p.x} ${p.y + 17})` }, svg);
     if (!M.art) el("text", { x: p.x, y: p.y - 13, class: "plabel" }, svg, p.id);
   });
@@ -405,19 +407,20 @@ function drawBoard() {
     else if (o.k === 3) { if (o.b < 0) return; to = M.provs[M.locs[o.b].prov]; dash = "5 4"; }
     else if (o.k === 4) { to = M.provs[o.a]; dash = "2 4"; }
     else return;
-    const dx = to.x - from.x, dy = to.y - from.y, d = Math.hypot(dx, dy) || 1, cut = 15;
+    const dx = to.x - from.x, dy = to.y - from.y, d = Math.hypot(dx, dy) || 1, cut = M.art ? 24 : 15;
     const colour = { g: "#2f7d3f", r: "#b3402e", b: "#1f5fa0" }[o.col] || "#222";
     el("line", { x1: from.x + dx / d * cut, y1: from.y + dy / d * cut, x2: to.x - dx / d * cut, y2: to.y - dy / d * cut, stroke: colour, "stroke-width": 3, "stroke-dasharray": dash, "marker-end": `url(#ah${o.col})`, "pointer-events": "none", opacity: .85 }, svg);
   });
   const mine = S.my ? S.my.power : (S.me ? S.me.power : -1);
+  const k = M.art ? 1.6 : 1;
   const drawUnit = (u, dx, dashed) => {
     const p = M.provs[M.locs[u.l].prov], ux = M.locs[u.l].x !== undefined ? M.locs[u.l].x : p.x, uy = M.locs[u.l].y !== undefined ? M.locs[u.l].y : p.y;
-    const x = ux + dx, y = uy + 2 + dx / 2;
+    dx *= k; const x = ux + dx, y = uy + 2 * k + dx / 2;
     const a = { fill: powerColor(u.p), stroke: dashed ? "#111" : (u.p === mine ? "#ffd200" : "#fff"), "stroke-width": u.p === mine ? 3 : 2, "pointer-events": "none" };
     if (dashed) a["stroke-dasharray"] = "3 2";
-    if (u.t === 1) el("path", Object.assign(a, { d: `M${x - 12},${y + 8} L${x + 12},${y + 8} L${x},${y - 12} z` }), svg);
-    else el("circle", Object.assign(a, { cx: x, cy: y, r: 10 }), svg);
-    el("text", { x, y: y + 4, class: "ulabel" }, svg, u.t === 1 ? "F" : "A");
+    if (u.t === 1) el("path", Object.assign(a, { d: `M${x - 12 * k},${y + 8 * k} L${x + 12 * k},${y + 8 * k} L${x},${y - 12 * k} z` }), svg);
+    else el("circle", Object.assign(a, { cx: x, cy: y, r: 10 * k }), svg);
+    el("text", { x, y: y + 4 * k, class: "ulabel", "font-size": 11 * k }, svg, u.t === 1 ? "F" : "A");
   };
   st.units.forEach(u => drawUnit(u, 0, false));
   st.dislodged.forEach(u => drawUnit(u, 16, true));

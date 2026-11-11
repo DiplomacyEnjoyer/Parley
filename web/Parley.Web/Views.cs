@@ -9,8 +9,9 @@ namespace Parley.Web;
 /// <summary>Builds the JSON the web page shows. Each player only ever receives their own orders.</summary>
 public static class Views
 {
-    public static object MapJson(MapData map)
+    public static object MapJson(MapData map, SvgArt.Art art = null)
     {
+        if (art != null) return ArtMapJson(map, art);
         bool hasLayout = Enumerable.Range(0, map.provCount).All(p => map.provX[p] >= 0);
         int[] x = map.provX, y = map.provY;
         int w = map.layoutWidth > 0 ? map.layoutWidth : 1000, hgt = map.layoutHeight > 0 ? map.layoutHeight : 1000;
@@ -34,6 +35,41 @@ public static class Views
             }),
             locs = Enumerable.Range(0, map.locCount).Select(l => new { id = map.locId[l], prov = map.locProv[l], coast = map.locCoast[l], name = map.LocName(l) }),
             links
+        };
+    }
+
+    /// <summary>A map with an imported picture: the drawn board, a clickable outline per province, unit spots.</summary>
+    private static object ArtMapJson(MapData map, SvgArt.Art art)
+    {
+        double[] Spot(string id, int prov)
+        {
+            if (art.Units.TryGetValue(id, out var u)) return u;
+            if (art.Units.TryGetValue(map.provId[prov], out u)) return u;
+            return new double[] { map.provX[prov] >= 0 ? map.provX[prov] : art.Width / 2, map.provY[prov] >= 0 ? map.provY[prov] : art.Height / 2 };
+        }
+        return new
+        {
+            id = map.mapId, name = map.mapName, hash = map.hash, credit = map.credit, license = map.license,
+            width = art.Width, height = art.Height, victory = map.victoryCenters, drawn = true,
+            art = art.Background, labels = art.Labels, artSource = art.Source,
+            powers = Enumerable.Range(0, map.powerCount).Select(i => new { id = map.powerId[i], name = map.powerName[i], color = map.powerColor[i] }),
+            provs = Enumerable.Range(0, map.provCount).Select(p =>
+            {
+                var at = Spot(map.provId[p], p);
+                art.Centres.TryGetValue(map.provId[p], out var sc);
+                return new
+                {
+                    id = map.provId[p], name = map.provName[p], type = map.provType[p], sc = map.provSc[p], home = map.provHome[p],
+                    x = at[0], y = at[1], shape = "", svg = art.Provs.TryGetValue(map.provId[p], out var m) ? m : "",
+                    scx = sc != null ? sc[0] : -1, scy = sc != null ? sc[1] : -1
+                };
+            }),
+            locs = Enumerable.Range(0, map.locCount).Select(l =>
+            {
+                var at = Spot(map.locId[l], map.locProv[l]);
+                return new { id = map.locId[l], prov = map.locProv[l], coast = map.locCoast[l], name = map.LocName(l), x = at[0], y = at[1] };
+            }),
+            links = new List<int[]>()
         };
     }
 

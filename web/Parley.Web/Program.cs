@@ -30,8 +30,12 @@ IResult Fail(string message) => Results.Json(new { error = message }, statusCode
 app.MapGet("/api/maps", () => lobby.Maps.Values.OrderBy(m => m.Map.powerCount).ThenBy(m => m.Map.mapName).Select(m => new
 {
     id = m.Map.mapId, name = m.Map.mapName, powers = m.Map.powerCount, provinces = m.Map.provCount, centres = m.Map.scCount,
-    credit = m.Map.credit
+    credit = m.Map.credit, art = m.Art != null, isDefault = m.Map.mapId == DefaultMap(lobby)
 }));
+
+// the classic board is the default once it has been fetched; otherwise the first original map
+static string DefaultMap(Lobby lobby) =>
+    lobby.Maps.ContainsKey("standard") ? "standard" : lobby.Maps.Keys.OrderBy(k => k).FirstOrDefault() ?? "";
 
 app.MapGet("/api/games", () => lobby.Games.Values.OrderByDescending(g => g.Created).Take(50).Select(g =>
 {

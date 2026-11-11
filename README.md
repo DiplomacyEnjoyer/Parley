@@ -5,7 +5,9 @@ rooms, enter secret orders by tapping, and everything resolves at once. Any map,
 number of players. Quest (including hand tracking) and Windows desktop play together.
 
 The rules are compatible with classic Diplomacy and are verified against the full DATC
-test suite. The name, maps and art are original.
+test suite. The classic board is the default map: its data and picture are downloaded
+at setup time from existing open-source fan projects (see below and
+[THIRD_PARTY.md](THIRD_PARTY.md)); nothing of theirs is committed here.
 
 **Where things stand:** see [STATUS.md](STATUS.md). **Why things are the way they are:**
 see [DECISIONS.md](DECISIONS.md). **Overall plan:** [PLAN.md](PLAN.md).
@@ -17,16 +19,56 @@ see [DECISIONS.md](DECISIONS.md). **Overall plan:** [PLAN.md](PLAN.md).
 | `engine/Parley.Engine` | The rules engine, in the restricted C# that VRChat's UdonSharp compiles. Copy these files (not the `Shim` folder) into the Unity project. |
 | `tools/Parley.Tools` | The `parley` command-line tool: map importer, map generator, rule tests, bot simulations. |
 | `tests/Parley.Tests` | Automated tests. `tests/datc` holds the DATC rule test cases. |
-| `maps/` | Original maps (`.pmap` text files). |
+| `maps/` | Generated "Ring" test maps (`.pmap` text files). |
+| `docs/` | Design notes for the VR world, variant research. |
 | `web/` | Flat web client for playing over Discord before the VR world exists. |
 | `scripts/` | Helper scripts. |
+
+## Getting the classic map working (step by step)
+
+You need: [.NET 8 SDK](https://dotnet.microsoft.com/download), Python 3 with `pip`, and
+an internet connection for step 2.
+
+1. Get the code:
+
+   ```bash
+   git clone https://github.com/DiplomacyEnjoyer/Parley.git
+   ```
+
+   ```bash
+   cd Parley
+   ```
+
+2. Download the classic board (and a few variants) and install it for the web client.
+   This fetches the open-source Python `diplomacy` package, copies its map files and board
+   pictures into `third_party/`, converts them, and writes the result into `maps-local/`:
+
+   ```bash
+   ./scripts/fetch-reference-maps.sh
+   ```
+
+   On Windows, run it from Git Bash or WSL. It should end with
+   `wrote maps-local/standard.art.json: 75 province shapes, 81 unit positions, 34 centre markers`.
+
+3. Start the web client:
+
+   ```bash
+   dotnet run --project web/Parley.Web
+   ```
+
+4. Open http://localhost:5080. "Standard" is already selected as the map. Press
+   **Create game**, enter your name, take a power, and send the page address to friends.
+   (Playing with friends outside your home network: see [web/README.md](web/README.md).)
+
+If the map list shows only the "Ring" maps, step 2 did not finish: run it again and
+read its last lines. The Ring maps are generated test maps, not launch maps.
 
 ## Trying it
 
 You need the [.NET 8 SDK](https://dotnet.microsoft.com/download) and, for the rule tests,
 Python 3 with pip (only to download reference maps).
 
-Download the reference maps the rule tests need (once, needs internet):
+Download the reference maps the rule tests need (once, needs internet; this is step 2 above):
 
 ```bash
 ./scripts/fetch-reference-maps.sh
@@ -73,9 +115,12 @@ dotnet run --project web/Parley.Web
 `MapData` loads a `.pmap` file. `BoardState` is the position. `Adjudicator` takes orders
 and resolves a phase. `OptionGenerator` lists what a player may tap next. `GameCodec`
 turns a position into a short game code and back. `GameHistory` keeps every phase and
-saves the whole game as one line of text. `GameFlow` runs the game: seats, secret order
-hand-in, timer, lock-in, resolution, drop/rejoin, resume and roll-back. None of them
-knows any particular map or player count.
+saves the whole game as one line of text. `OrderSeal` seals a secret order sheet
+(SHA-256 commit and reveal) so nobody's machine sees anyone's orders early.
+`Announcement` lists the orders country by country for the announcer, with where each
+piece is heading and what became of it. `GameFlow` runs the game: seats, the timer
+schedule, submit toggle, sealing and opening, announcement, ready-up, pause, drop/rejoin,
+resume and roll-back. None of them knows any particular map or player count.
 
 ## Map format (`.pmap`)
 
@@ -112,6 +157,7 @@ defaults (more than half the centres; build in home centres only).
 
 ## Licence
 
-Code: [MPL 2.0](LICENSE). Maps and art: [CC BY-SA 4.0](LICENSE-ART).
+Code: [MPL 2.0](LICENSE). Parley's own maps and art: [CC BY-SA 4.0](LICENSE-ART).
+Downloaded maps and pictures are other people's work: [THIRD_PARTY.md](THIRD_PARTY.md).
 DATC test cases © Lucas B. Kruijswijk, used under the DATC's own terms.
 "Diplomacy" is a trademark of its owner; this project is not affiliated with it.

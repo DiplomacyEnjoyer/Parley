@@ -11,6 +11,8 @@ static int Usage()
           parley datc [case-id]                 run the DATC rule test cases
           parley import-dpjudge <in.map> <out.pmap> [id] [name...]
                                                 convert a DPjudge-format map
+          parley import-svg <map.pmap> <board.svg> <out.art.json> [dpjudge.map]
+                                                match a jDip-style board picture to a map (for the web client)
           parley check-map <file.pmap>          load a map and print a summary
           parley sim <file.pmap> [games] [seed] [maxYears] [basic|random]
                                                 play bot games; checks + per-power statistics
@@ -48,6 +50,19 @@ switch (args[0])
             if (!map.Load(res.Pmap)) { Console.WriteLine("converted map does not load: " + map.error); return 1; }
             File.WriteAllText(args[2], res.Pmap);
             Console.WriteLine($"wrote {args[2]}: {map.provCount} provinces, {map.scCount} centres, {map.powerCount} powers");
+            return 0;
+        }
+    case "import-svg":
+        {
+            if (args.Length < 4) return Usage();
+            var map = new Parley.Engine.MapData();
+            if (!map.Load(File.ReadAllText(args[1]))) { Console.WriteLine("map does not load: " + map.error); return 1; }
+            var aliases = args.Length > 4 ? DpjudgeImporter.Import(args[4]).Aliases : new Dictionary<string, List<string>>();
+            var warnings = new List<string>();
+            var art = SvgArt.Convert(args[2], map, aliases, warnings);
+            foreach (var w in warnings) Console.WriteLine("warning: " + w);
+            SvgArt.Write(art, args[3]);
+            Console.WriteLine($"wrote {args[3]}: {art.Provs.Count} province shapes, {art.Units.Count} unit positions, {art.Centres.Count} centre markers");
             return 0;
         }
     case "check-map":
