@@ -216,7 +216,7 @@ app.MapPost("/api/games/{id}/host", (string id, HostRequest req) =>
             case "start": if (!f.StartGame(now)) return Fail(f.error); break;
             case "pause": f.Pause(now); break;
             case "resume": f.Resume(now); break;
-            case "next": f.ForceNext(now); break;
+            case "next": f.ForceNext(now); if (f.error != "") return Fail(f.error); break;
             case "rollback": if (!f.RollBack(req.Index, now)) return Fail(f.error); break;
             case "timers": Lobby.ApplySettings(f, req.MoveSchedule, req.RetreatSeconds, req.AdjustSeconds, req.Announce, req.ReadyUp); break;
             case "wait": f.waitForAbsent = req.Value; break;

@@ -219,6 +219,16 @@ Every difference was examined:
   DATC 6.E.3 and 6.E.12). godip lets the other unit through. I believe this is a godip
   deviation, not a Parley bug; the Python engine agrees with Parley.
 
+**Third session: re-run after the engine was restructured into rulesets (decision 23).**
+The old and the new engine were given the same 20,000 situations and the same 400 whole
+games: their answers are **byte-for-byte identical**. Against the other engines: Python
+19,986 of 20,000 situations identical (13 the known convoy difference; 1 new case, below),
+400 games with no unexplained difference in either the Python engine or godip; DATC 165
+of 165. The one new case: a power supports a *foreign* army's convoyed attack on its
+*own* fleet. Parley does not count that support towards dislodging the fleet (the rule
+that you cannot help dislodge your own unit; DATC 6.D.10 and 6.D.11); the Python engine
+does. Parley's answer is the DATC's, so I left it.
+
 *jDip as a third adjudicator:* not done. Its engine is Java with no command-line
 adjudication; a harness would need its classes. jDip's *data* is cross-checked instead
 (its Standard board converts to exactly the DPjudge board).
@@ -491,6 +501,10 @@ anything a player would notice even at Udon's speed.
 
 *Alternative considered:* trust the instance owner (simpler; rejected by the owner).
 
+**Third session:** this design was reviewed adversarially and hardened; see decision 24
+and `docs/secret-orders-and-dice.md`. Seals now also name the run of the game, salts
+must be 128 bits, and the host can no longer cut the opening short.
+
 ## 19. Timer schedule
 
 Movement (negotiation) phases follow a schedule: **30 minutes for the first two, then
@@ -620,3 +634,65 @@ switch: adding a ruleset means writing its module and adding one line per method
 **Limits to know about.** An adjustment phase can only follow the last season of the
 year. The map file format gained optional lines (`rules`, `seasons`, `city`, `convoy
 coastal`, `x ...`); files without them mean exactly what they did.
+
+## 24. Tamper-proof orders, reviewed as an attacker would
+
+The commit-and-reveal design of decision 18 was reviewed for ways a player or the host
+could peek, change, withhold or replay. Full write-up, with a test per attack:
+`docs/secret-orders-and-dice.md`. Summary of what changed:
+
+| Found | Fix |
+|---|---|
+| The host could end the opening of sheets at a moment of their choosing, leaving a rival's units holding | A floor (`revealFloorSeconds`, 10 s) before the host may skip the stage |
+| Handing a seat to a friend after the freeze wiped that seat's orders (a way to take them back) | Seat changes clear nothing once seals are frozen |
+| A seal named the position but not the game: after a roll-back, or in another game on the same map, old seals and sheets fitted again | Seals are tied to a per-run random name (`GameFlow.timeline`) that changes on every start, load and roll-back |
+| Nothing helped a device make a good salt; 64-bit salts were accepted | 128-bit minimum; a per-device entropy pool (`OrderSeal.Stir` / `NextSalt`) |
+| Odd characters could hash differently on different devices | Sealed text must be plain ASCII |
+| A host leaving mid-phase lost the phase | `GameFlow.LiveState` / `LoadLiveState`; opened sheets in a hand-over are re-checked against their seals |
+| Checking a result meant checking each seal by hand | `GameFlow.VerifyLast` checks sheets, seals and dice seed in one call |
+
+The hand-written SHA-256 was checked against the NIST examples (including the
+million-letter one) and every block-boundary length. No fault found.
+
+**What stays possible, and why I left it:** a player can refuse to open after seeing
+the other sheets. Their units all hold, it is announced and counted. Preventing it
+needs either a neutral party or private channels plus real public-key cryptography in
+Udon; the options and their costs are in the write-up. *My recommendation:* keep the
+current rule, and revisit "escrow shares" in the Unity phase if VRChat's private
+network events prove usable.
+
+*Alternative considered for the replay fix:* putting a game identifier into the
+archive. Rejected because it changes the archive format, and a per-run name is
+stronger anyway (it also covers roll-backs within one game).
+
+**The web server** now saves the live state of the phase, so a restarted server
+continues the same phase with the same clock; before, it came back paused.
+
+## 25. Fair dice: built from everybody's sealed secrets
+
+Rulesets with random events need dice nobody can predict or rig, the host included.
+
+**Chosen:** the dice seed of a phase is a fingerprint of all the salts that were opened
+in that phase. Each salt was fixed by its seal before any other was visible; the seed
+needs all of them; one honest player is enough to make it unpredictable. Each roll is
+a fixed function of the seed and the roll's name, so every device rolls for itself,
+the order of rolls cannot cause disagreement, and anyone can re-check later
+(`Dice.cs`, `GameFlow.DiceSeed`, `GameFlow.VerifyLast`). In a dice phase every player
+present seals, even with an empty sheet.
+
+**Known weakness, accepted:** refusing to open changes the seed, so a player can buy one
+re-roll with their whole turn, publicly. Two design rules keep that expensive: an
+attempt that needs dice (assassination) is on the sheet, so you cannot re-roll your
+own; and dice are rolled **only when movement phases resolve**, when every living
+power has a turn to lose. Events that belong "between" phases are rolled at the
+preceding movement phase (decision 26 and `docs/machiavelli-rulings.md`).
+
+*Alternatives considered:*
+- **The host rolls.** Rejected: the host could re-roll privately until satisfied.
+- **A separate commit-and-reveal round just for dice.** Same security as reusing the
+  seals, one more round trip per phase, and a free re-roll for anyone with nothing at
+  stake in that round.
+- **A fine for not opening** instead of tying dice to movement phases. Punishes
+  genuine crashes; kept in reserve.
+- **Secret-sharing so that the others can open an absent player's secret.** The real
+  fix; needs private channels (see decision 24).

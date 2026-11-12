@@ -104,6 +104,17 @@ namespace Parley.Engine
         public float announceStart;
         /// <summary>Why the last phase closed (CLOSED_*).</summary>
         public int closeReason;
+        /// <summary>Time at which the current CLOSING or REVEAL stage began.</summary>
+        public float stageBegan;
+        /// <summary>
+        /// Names this run of the game: it changes whenever a game is started, loaded,
+        /// resumed or rolled back. Seals are tied to it, so a seal (or an opened sheet)
+        /// from another game, or from a stretch of this game that was rolled back, never
+        /// fits a phase played now, even if the position is identical.
+        /// </summary>
+        public string timeline = "";
+        /// <summary>Per power: how many times in this run its sealed sheet was frozen but never opened.</summary>
+        public int[] unopened;
 
         // ---- settings ----
         /// <summary>True: orders travel as seals and are opened only when all seals are frozen.</summary>
@@ -116,6 +127,12 @@ namespace Parley.Engine
         public float closeGraceSeconds;
         /// <summary>Sealed orders: seconds devices get to open their sheets (0 = wait until the host moves on).</summary>
         public float revealSeconds;
+        /// <summary>
+        /// Sealed orders: the host cannot cut the opening of sheets short before this many
+        /// seconds have passed. Without it a host could watch the sheets come in and stop
+        /// the stage at the moment that suits them, leaving a slower player's units holding.
+        /// </summary>
+        public float revealFloorSeconds;
         /// <summary>Announcement: the end-of-round sound and the short pause after it.</summary>
         public float announceLeadSeconds;
         /// <summary>Announcement: time to name each country.</summary>
@@ -133,6 +150,8 @@ namespace Parley.Engine
 
         private int[] handIn;
         private string[] saltText;
+        private string entropy = "";
+        private int timelineCount;
 
         public void Init(MapData m, BoardState s, Adjudicator a, GameCodec c, GameHistory h, BoardState scratchState, OrderSeal orderSeal, Announcement announcement, Ruleset ruleset, Dice diceCup)
         {
@@ -143,12 +162,15 @@ namespace Parley.Engine
             seatPresent = new bool[n]; sheet = new string[n]; submitted = new bool[n]; sealText = new string[n]; opened = new bool[n];
             ready = new bool[n]; drawVote = new bool[n]; handIn = new int[n]; saltText = new string[n];
             lastSeal = new string[n]; lastSalt = new string[n]; lastSheet = new string[n];
+            unopened = new int[n]; stageBegan = 0; revealFloorSeconds = 10; timeline = ""; timelineCount = 0;
+            lastSealKey = ""; lastDiceSeed = "";
             stage = STAGE_LOBBY; deadline = -1; pausedRemaining = -1; stageEnds = -1; announceStart = 0; closeReason = 0; phaseSerial = 0;
             sealedOrders = false; waitForAbsent = false; readyMode = READY_NEVER;
             closeGraceSeconds = 5; revealSeconds = 20;
             announceLeadSeconds = 0; announcePowerSeconds = 0; announceOrderSeconds = 0; announceResultSeconds = 0;
-            for (int i = 0; i < n; i++) { seatPresent[i] = false; lastSeal[i] = ""; lastSalt[i] = ""; lastSheet[i] = ""; }
+            for (int i = 0; i < n; i++) { seatPresent[i] = false; lastSeal[i] = ""; lastSalt[i] = ""; lastSheet[i] = ""; unopened[i] = 0; }
             ClearPhaseData();
+            NewTimeline();
             rules.SetupStart(state);
         }
 
@@ -198,8 +220,10 @@ namespace Parley.Engine
                 if (stage != STAGE_LOBBY) { error = "you already play another power"; return false; }
                 history.seatName[old] = ""; seatPresent[old] = false;
             }
-            // a newcomer cannot open the previous player's sealed sheet, so the seat starts the phase afresh
-            if (holder != playerName) ClearPower(power);
+            // A newcomer cannot open the previous player's sealed sheet, so the seat starts the
+            // phase afresh. Not once seals are frozen, though: what was sealed (and perhaps
+            // already opened) stands, or a seat could be handed over just to take orders back.
+            if (holder != playerName && !SealsFrozen()) ClearPower(power);
             history.seatName[power] = playerName; seatPresent[power] = true;
             return true;
         }
@@ -208,8 +232,10 @@ namespace Parley.Engine
         {
             if (power < 0 || power >= map.powerCount) return;
             history.seatName[power] = ""; seatPresent[power] = false;
-            ClearPower(power);
+            if (!SealsFrozen()) ClearPower(power);
         }
+
+        private bool SealsFrozen() { return stage == STAGE_REVEAL; }
 
         /// <summary>
         /// Call when a player leaves the instance. Their seat is kept for them; until they
@@ -259,6 +285,7 @@ namespace Parley.Engine
             ClearPhaseData();
             announce.Clear();
             phaseSerial++;
+            NewTimeline();
             NextStage(now);
             return true;
         }
@@ -332,6 +359,128 @@ namespace Parley.Engine
             if (state.phase == BoardState.PHASE_FINISHED) { stage = STAGE_FINISHED; pausedRemaining = -1; }
             else { stage = STAGE_PAUSED; pausedRemaining = PhaseSeconds(); }
             phaseSerial++;
+            NewTimeline();
+        }
+
+        /// <summary>
+        /// Feeds unpredictable noise to the flow (random numbers, exact times). It goes into
+        /// the names given to runs of the game (see <see cref="timeline"/>); the more the better.
+        /// </summary>
+        public void Stir(string noise)
+        {
+            entropy = seal.Sha256Hex("flow|" + entropy + "|" + (noise == null ? "" : noise));
+        }
+
+        private void NewTimeline()
+        {
+            timelineCount++;
+            entropy = seal.Sha256Hex("line|" + entropy + "|" + timeline + "|" + timelineCount.ToString() + "|" + phaseSerial.ToString());
+            timeline = entropy.Substring(0, 16);
+            for (int p = 0; p < map.powerCount; p++) unopened[p] = 0;
+        }
+
+        // =====================================================================
+        // Handing a running phase over (the host left, a server restarted)
+        // =====================================================================
+
+        /// <summary>
+        /// Everything about the phase in progress that is not in the archive, as one line
+        /// of text: the stage, the clock, who has submitted, the seals, and the sheets that
+        /// have been opened. A host publishes this alongside the archive; if the host goes,
+        /// whoever takes over loads the archive and then this, and the phase carries on
+        /// where it was. It contains nothing secret: unopened sheets are not in it,
+        /// because the flow never has them.
+        /// </summary>
+        public string LiveState(float now)
+        {
+            float clock = -1; float began = 0;
+            if (stage == STAGE_ORDERS) clock = deadline < 0 ? -1 : deadline - now;
+            else if (stage == STAGE_PAUSED) clock = pausedRemaining;
+            else if (stage == STAGE_CLOSING || stage == STAGE_REVEAL || stage == STAGE_ANNOUNCE)
+            {
+                clock = stageEnds < 0 ? -1 : stageEnds - now;
+                began = now - stageBegan;
+            }
+            string r = "PL1|" + timeline + "|" + stage.ToString() + "|" + history.count.ToString() + "|" + codec.Checksum(codec.EncodeBody(state))
+                + "|" + closeReason.ToString() + "|" + Tenths(clock) + "|" + Tenths(began);
+            for (int p = 0; p < map.powerCount; p++)
+            {
+                int flags = (submitted[p] ? 1 : 0) + (opened[p] ? 2 : 0) + (ready[p] ? 4 : 0) + (drawVote[p] ? 8 : 0);
+                r += "|" + flags.ToString() + ":" + sealText[p] + ":" + (opened[p] ? saltText[p] : "") + ":" + (opened[p] ? sheet[p] : "") + ":" + unopened[p].ToString();
+            }
+            return r;
+        }
+
+        private string Tenths(float seconds)
+        {
+            if (seconds < 0) return "-1";
+            int t = (int)(seconds * 10 + 0.5f);
+            return t.ToString();
+        }
+
+        /// <summary>
+        /// Takes over a phase in progress from text made by <see cref="LiveState"/>. The
+        /// flow must already hold the same game at the same point (load the archive
+        /// first). Everything is checked: a sheet is accepted only if it opens the seal
+        /// that comes with it, so a handover cannot be used to slip in changed orders.
+        /// On failure nothing changes and the game stays as the archive left it (paused).
+        /// </summary>
+        public bool LoadLiveState(string text, float now)
+        {
+            error = "";
+            if (text == null) { error = "no live state"; return false; }
+            string[] f = text.Split('|');
+            int n = map.powerCount;
+            if (f.Length != 8 + n || f[0] != "PL1") { error = "this is not the live state of a game on this board"; return false; }
+            int st = map.ParseInt(f[2], -1);
+            if (st < STAGE_LOBBY || st > STAGE_READY) { error = "bad stage"; return false; }
+            if (map.ParseInt(f[3], -1) != history.count || f[4] != codec.Checksum(codec.EncodeBody(state))) { error = "the live state belongs to a different point of the game"; return false; }
+            if ((st == STAGE_FINISHED) != (state.phase == BoardState.PHASE_FINISHED) || (st == STAGE_LOBBY) != (history.count == 0)) { error = "the live state does not fit the position"; return false; }
+            int reason = map.ParseInt(f[5], -1);
+            int clockT = map.ParseInt(f[6], -2); int beganT = map.ParseInt(f[7], -2);
+            if (reason < 0 || clockT < -1 || beganT < 0 || f[1].Length != 16 || !seal.TextOk(f[1])) { error = "bad live state"; return false; }
+
+            // read and check everything before touching the flow
+            string oldLine = timeline;
+            timeline = f[1];
+            string key = SealKey();
+            string[] nSeal = new string[n]; string[] nSalt = new string[n]; string[] nSheet = new string[n];
+            int[] nFlags = new int[n]; int[] nUnopened = new int[n];
+            bool ok = true;
+            bool takesSeals = st == STAGE_ORDERS || st == STAGE_PAUSED || st == STAGE_CLOSING || st == STAGE_REVEAL;
+            for (int p = 0; p < n && ok; p++)
+            {
+                string[] q = f[8 + p].Split(':');
+                if (q.Length != 5) { ok = false; break; }
+                nFlags[p] = map.ParseInt(q[0], -1); nSeal[p] = q[1]; nSalt[p] = q[2]; nSheet[p] = q[3]; nUnopened[p] = map.ParseInt(q[4], -1);
+                if (nFlags[p] < 0 || nFlags[p] > 15 || nUnopened[p] < 0) ok = false;
+                else if (nSeal[p] != "" && (!takesSeals || !seal.SealOk(nSeal[p]))) ok = false;
+                else if ((nFlags[p] & 2) != 0)
+                {
+                    // an opened sheet: only believed if it opens the seal next to it
+                    if (st != STAGE_REVEAL || !seal.Check(nSeal[p], nSalt[p], p, key, nSheet[p]) || !rules.OrdersOk(nSheet[p], state, p)) ok = false;
+                }
+                else if (nSalt[p] != "" || nSheet[p] != "") ok = false;
+                if (sealedOrders && (nFlags[p] & 1) != 0 && nSeal[p] == "" && takesSeals) ok = false;
+            }
+            if (!ok) { timeline = oldLine; error = "the live state is damaged or was tampered with"; return false; }
+
+            ClearPhaseData();
+            for (int p = 0; p < n; p++)
+            {
+                submitted[p] = (nFlags[p] & 1) != 0; opened[p] = (nFlags[p] & 2) != 0; ready[p] = (nFlags[p] & 4) != 0; drawVote[p] = (nFlags[p] & 8) != 0;
+                sealText[p] = nSeal[p]; saltText[p] = nSalt[p]; sheet[p] = nSheet[p]; unopened[p] = nUnopened[p];
+            }
+            closeReason = reason;
+            float clock = clockT < 0 ? -1 : clockT / 10f;
+            deadline = -1; pausedRemaining = -1; stageEnds = -1; stageBegan = now - beganT / 10f;
+            stage = st;
+            if (st == STAGE_ORDERS) deadline = clock < 0 ? -1 : now + clock;
+            else if (st == STAGE_PAUSED) pausedRemaining = clock;
+            else if (st == STAGE_CLOSING || st == STAGE_REVEAL) stageEnds = clock < 0 ? -1 : now + clock;
+            else if (st == STAGE_ANNOUNCE) { announce.Clear(); NextStage(now); } // the reading is lost with the old host; the result is on the board
+            phaseSerial++;
+            return true;
         }
 
         // =====================================================================
@@ -454,7 +603,7 @@ namespace Parley.Engine
         /// <summary>The text a seal for the current phase must be tied to (see OrderSeal.Make).</summary>
         public string SealKey()
         {
-            return history.count.ToString() + "." + codec.EncodeBody(state);
+            return timeline + "." + history.count.ToString() + "." + codec.EncodeBody(state);
         }
 
         /// <summary>
@@ -619,9 +768,16 @@ namespace Parley.Engine
         /// </summary>
         public void ForceNext(float now)
         {
+            error = "";
             if (stage == STAGE_ORDERS || stage == STAGE_PAUSED) { deadline = -1; pausedRemaining = -1; Close(now, CLOSED_BY_HOST); }
-            else if (stage == STAGE_CLOSING) BeginReveal(now);
-            else if (stage == STAGE_REVEAL) ResolveAndAnnounce(now);
+            else if (stage == STAGE_CLOSING || stage == STAGE_REVEAL)
+            {
+                // Not before every device has had a fair chance: see revealFloorSeconds.
+                float floor = stage == STAGE_CLOSING ? closeGraceSeconds : revealFloorSeconds;
+                if (stage == STAGE_REVEAL && revealSeconds > 0 && revealSeconds < floor) floor = revealSeconds;
+                if (now - stageBegan < floor) { error = "sheets are still coming in; this can be skipped in a few seconds"; return; }
+                if (stage == STAGE_CLOSING) BeginReveal(now); else ResolveAndAnnounce(now);
+            }
             else if (stage == STAGE_ANNOUNCE) NextStage(now);
             else if (stage == STAGE_READY) BeginOrders(now);
         }
@@ -631,7 +787,7 @@ namespace Parley.Engine
             closeReason = reason;
             if (!sealedOrders) { ResolveAndAnnounce(now); return; }
             if (AllSealed()) { BeginReveal(now); return; }
-            stage = STAGE_CLOSING; deadline = -1;
+            stage = STAGE_CLOSING; deadline = -1; stageBegan = now;
             stageEnds = now + (closeGraceSeconds < 0 ? 0 : closeGraceSeconds);
         }
 
@@ -640,7 +796,7 @@ namespace Parley.Engine
             bool any = false;
             for (int p = 0; p < map.powerCount; p++) if (sealText[p] != "") any = true;
             if (!any) { ResolveAndAnnounce(now); return; }
-            stage = STAGE_REVEAL; deadline = -1;
+            stage = STAGE_REVEAL; deadline = -1; stageBegan = now;
             stageEnds = revealSeconds > 0 ? now + revealSeconds : -1;
         }
 
@@ -669,7 +825,8 @@ namespace Parley.Engine
                 if (use) rules.AddOrders(sheet[p], state, p);
                 lastSeal[p] = sealText[p];
                 lastSheet[p] = use ? sheet[p] : "";
-                lastSalt[p] = use && sealedOrders ? saltText[p] : "";
+                lastSalt[p] = sealedOrders && opened[p] ? saltText[p] : "";
+                if (sealedOrders && sealText[p] != "" && !opened[p]) unopened[p]++;
             }
             history.SetLatestOrders(rules.OrdersText(state, -1));
             announce.Capture(state, adj, handIn);
@@ -683,6 +840,31 @@ namespace Parley.Engine
             float length = announce.Duration(announceLeadSeconds, announcePowerSeconds, announceOrderSeconds, announceResultSeconds);
             if (length > 0) { stage = STAGE_ANNOUNCE; announceStart = now; stageEnds = now + length; }
             else NextStage(now);
+        }
+
+        /// <summary>
+        /// Checks the phase that was resolved last, from what was published about it: every
+        /// sheet that was used matches the seal that was frozen before it was opened, and
+        /// the dice seed is the one those secrets give. Any device can run this on its own
+        /// copy; a host cannot pass off a changed sheet or a seed of its own choosing.
+        /// </summary>
+        public bool VerifyLast()
+        {
+            error = "";
+            if (lastSealKey == "") return true; // nothing sealed was resolved yet
+            string t = Dice.VERSION + "|seed|" + lastSealKey;
+            for (int p = 0; p < map.powerCount; p++)
+            {
+                if (lastSalt[p] == "")
+                {
+                    if (lastSheet[p] != "") { error = map.powerName[p] + ": orders were used that nobody opened"; return false; }
+                    continue;
+                }
+                if (!seal.Check(lastSeal[p], lastSalt[p], p, lastSealKey, lastSheet[p])) { error = map.powerName[p] + ": the sheet does not match its seal"; return false; }
+                t += "|" + p.ToString() + ":" + lastSalt[p];
+            }
+            if (lastDiceSeed != "" && lastDiceSeed != seal.Sha256Hex(t)) { error = "the dice seed does not follow from the opened sheets"; return false; }
+            return true;
         }
 
         // The dice seed of the phase being resolved: a fingerprint of every secret that was

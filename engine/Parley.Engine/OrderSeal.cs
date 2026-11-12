@@ -21,7 +21,8 @@ namespace Parley.Engine
     public class OrderSeal : UdonSharpBehaviour
     {
         public const string VERSION = "PS1";
-        public const int MIN_SALT_CHARS = 16;
+        /// <summary>32 hex digits = 128 bits: far beyond trying every salt, even for a seal that is attacked for years.</summary>
+        public const int MIN_SALT_CHARS = 32;
         private const string HEXDIGITS = "0123456789abcdef";
 
         private int[] kh; private int[] kl;       // round constants, high and low halves
@@ -29,6 +30,8 @@ namespace Parley.Engine
         private int[] hh; private int[] hl;       // running hash
         private int[] data; private int dataLen;  // message bytes
         private int rh; private int rl;           // result of the helper that was called last
+        private string pool = "";                 // this device's private store of unpredictability
+        private int poolCount;
 
         public void Init()
         {
@@ -65,7 +68,25 @@ namespace Parley.Engine
         {
             if (seal == null || seal.Length != 64) return false;
             if (!SaltOk(salt)) return false;
+            if (!TextOk(phaseKey) || !TextOk(orders)) return false;
             return Make(salt, power, phaseKey, orders) == seal;
+        }
+
+        /// <summary>
+        /// Sealed text must be plain printable ASCII without '|'. Order sheets always are.
+        /// Insisting on it means every implementation of the hash (this one, a browser's,
+        /// a checking tool's) turns the text into the same bytes, and that the fields of a
+        /// seal can never run into each other.
+        /// </summary>
+        public bool TextOk(string text)
+        {
+            if (text == null) return true;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c < 33 || c > 126 || c == '|') return false;
+            }
+            return true;
         }
 
         /// <summary>A salt must be letters and digits only and long enough to be unguessable.</summary>
@@ -96,7 +117,32 @@ namespace Parley.Engine
         /// </summary>
         public string SaltFrom(string noise)
         {
-            return Sha256Hex("salt|" + noise).Substring(0, 32);
+            Stir(noise);
+            return NextSalt();
+        }
+
+        /// <summary>
+        /// Feeds unpredictable noise into this device's private pool. Call it often, with
+        /// anything that is hard to guess from outside: head and hand positions, the exact
+        /// time of each tap, frame times. Noise only ever adds: stirring in something an
+        /// attacker happens to know does no harm. Nothing stirred in ever leaves the device.
+        /// </summary>
+        public void Stir(string noise)
+        {
+            pool = Sha256Hex("pool|" + pool + "|" + (noise == null ? "" : noise));
+        }
+
+        /// <summary>
+        /// A fresh salt from the pool. The pool then moves on in a way that cannot be run
+        /// backwards or forwards from the salt, so when this salt is published at the
+        /// reveal it says nothing about the salts that came before it or will come after.
+        /// </summary>
+        public string NextSalt()
+        {
+            poolCount++;
+            string salt = Sha256Hex("salt|" + pool + "|" + poolCount.ToString()).Substring(0, 32);
+            pool = Sha256Hex("next|" + pool);
+            return salt;
         }
 
         // =====================================================================

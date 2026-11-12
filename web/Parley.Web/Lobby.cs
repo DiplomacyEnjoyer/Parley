@@ -82,6 +82,7 @@ public sealed class Lobby
         string id;
         do { id = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant(); } while (Games.ContainsKey(id));
         var wg = new WebGame { Id = id, Title = title, Info = m, G = Game.FromPmap(m.Pmap) };
+        wg.G.Flow.Stir(Convert.ToHexString(RandomNumberGenerator.GetBytes(32))); // names each run of the game unpredictably (GameFlow.timeline)
         WebDefaults(wg.G.Flow);
         Games[id] = wg;
         return wg;
@@ -160,7 +161,8 @@ public sealed class Lobby
         public int[] Timers { get; set; }
         public string Announce { get; set; }
         public bool ReadyUp { get; set; }
-        public string[] Seals { get; set; }
+        public string[] Seals { get; set; }   // older saves only; Live replaces it
+        public string Live { get; set; }
         public string[] JoinOrder { get; set; }
         public string[] Seats { get; set; }
         public string Archive { get; set; }
@@ -182,7 +184,7 @@ public sealed class Lobby
             Seats = h.seatName.ToArray(),
             Archive = h.count > 0 ? f.Archive() : "",
             Running = f.stage != GameFlow.STAGE_PAUSED && f.stage != GameFlow.STAGE_LOBBY && f.stage != GameFlow.STAGE_FINISHED,
-            Seals = f.sealText.ToArray(),
+            Live = h.count > 0 ? f.LiveState(Now) : "",
         };
         string path = Path.Combine(dataDir, wg.Id + ".json");
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(s));
@@ -197,15 +199,19 @@ public sealed class Lobby
         int order = 0;
         foreach (var (token, name) in s.Players) wg.Players[token] = new Player { Name = name, LastSeen = -1000, JoinOrder = order++ };
         var f = wg.G.Flow; var h = wg.G.History;
+        f.Stir(Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
         WebDefaults(f);
         ApplySettings(f, s.Schedule, s.Timers?[1] ?? 0, s.Timers?[2] ?? 0, s.Announce, s.ReadyUp);
         if (!string.IsNullOrEmpty(s.Archive))
         {
             if (!f.LoadArchive(s.Archive, Now)) { Console.WriteLine($"saved game {file}: {f.error}"); return; }
-            // seals that were published before the server stopped still count; the browsers kept the sheets
-            for (int p = 0; p < wg.G.Map.powerCount && s.Seals != null && p < s.Seals.Length; p++)
-                if (!string.IsNullOrEmpty(s.Seals[p])) f.SetSeal(p, s.Seals[p]);
-            if (s.Running) f.Resume(Now);
+            // The phase carries on exactly where the server stopped: same run of the game, so
+            // seals that were published still count (the browsers kept the sheets), and the
+            // clock shows what was left. A save without live state comes back as a new run.
+            if (string.IsNullOrEmpty(s.Live) || !f.LoadLiveState(s.Live, Now))
+            {
+                if (s.Running) f.Resume(Now);
+            }
         }
         else
         {

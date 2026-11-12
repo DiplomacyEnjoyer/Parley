@@ -34,6 +34,16 @@ public sealed class SealedDevice
         return flow.SetSeal(Power, seal.Make(Salt, Power, flow.SealKey(), Sheet));
     }
 
+    /// <summary>
+    /// The same physical device after the game moved to another host: it keeps its
+    /// sheet, its salt and its memory of having sealed.
+    /// </summary>
+    public void Adopt(SealedDevice old)
+    {
+        Sheet = old.Sheet; Salt = old.Salt;
+        if (old.sealedSerial >= 0 && flow.sealText[Power] != "") sealedSerial = flow.phaseSerial;
+    }
+
     /// <summary>Flips the submit toggle off to keep editing.</summary>
     public bool SubmitOff() => flow.SetSubmitted(Power, false);
 
@@ -43,7 +53,8 @@ public sealed class SealedDevice
     /// </summary>
     public void React()
     {
-        if (flow.stage == GameFlow.STAGE_CLOSING && flow.sealText[Power] == "" && flow.NeedsOrders(Power)) SubmitOn();
+        // (NeedsSeal, not NeedsOrders: in a phase with dice a device with nothing to order still seals, to put its secret into the dice)
+        if (flow.stage == GameFlow.STAGE_CLOSING && flow.sealText[Power] == "" && flow.NeedsSeal(Power)) SubmitOn();
         if (flow.stage == GameFlow.STAGE_REVEAL && flow.sealText[Power] != "" && !flow.opened[Power] && sealedSerial == flow.phaseSerial)
             flow.Open(Power, Salt, Sheet);
     }
