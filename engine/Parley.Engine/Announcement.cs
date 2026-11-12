@@ -31,6 +31,10 @@ namespace Parley.Engine
         public const int K_REMOVE = 8;        // a = loc of the unit removed
         public const int K_WAIVE = 9;         // a build not used
         public const int K_AUTO_REMOVE = 10;  // removed by the rules because no removal was ordered
+        public const int K_CONVERT = 11;      // a = where the unit ends up, b = the unit type it becomes
+        public const int K_BESIEGE = 12;
+        public const int K_LIFT = 13;
+        public const int K_NOTE = 14;         // something the ruleset reports in words (money, bribes, events); see note[]
 
         // what became of it
         public const int O_OK = 0;
@@ -78,6 +82,8 @@ namespace Parley.Engine
         /// <summary>True if the piece really ended up at moveTo.</summary>
         public bool[] moved;
         public bool[] dislodged;
+        /// <summary>For K_NOTE lines: what happened, in words.</summary>
+        public string[] note;
 
         /// <summary>Reading order: seq[k] is the line read k-th. Lines of one country are together.</summary>
         public int[] seq;
@@ -111,11 +117,12 @@ namespace Parley.Engine
         public void Init(MapData m)
         {
             map = m;
-            int cap = m.provCount * 3 + m.powerCount + 16;
+            int cap = m.provCount * 3 + m.powerCount * 8 + 80;
             power = new int[cap]; unitType = new int[cap]; fromLoc = new int[cap]; kind = new int[cap];
             a = new int[cap]; b = new int[cap]; via = new bool[cap]; otherType = new int[cap]; moveTo = new int[cap];
-            outcome = new int[cap]; moved = new bool[cap]; dislodged = new bool[cap]; seq = new int[cap];
-            groupPower = new int[m.powerCount]; groupFirst = new int[m.powerCount]; groupItems = new int[m.powerCount];
+            cap = cap + 64;
+            outcome = new int[cap]; moved = new bool[cap]; dislodged = new bool[cap]; seq = new int[cap]; note = new string[cap];
+            groupPower = new int[m.powerCount + 1]; groupFirst = new int[m.powerCount + 1]; groupItems = new int[m.powerCount + 1];
             powerStatus = new int[m.powerCount];
             battleProv = new int[m.provCount]; battleMovers = new int[m.provCount]; battleSupports = new int[m.provCount];
             battleDefended = new bool[m.provCount]; battleWinner = new int[m.provCount];
@@ -135,8 +142,36 @@ namespace Parley.Engine
             int i = count;
             if (i >= power.Length) return -1;
             power[i] = pw; unitType[i] = type; fromLoc[i] = from; kind[i] = k; a[i] = va; b[i] = vb; via[i] = viaConvoy;
-            otherType[i] = -1; moveTo[i] = -1; outcome[i] = O_OK; moved[i] = false; dislodged[i] = false;
+            otherType[i] = -1; moveTo[i] = -1; outcome[i] = O_OK; moved[i] = false; dislodged[i] = false; note[i] = "";
             count = i + 1;
+            return i;
+        }
+
+        /// <summary>
+        /// Starts an announcement that a ruleset fills in itself (with <see cref="Note"/>
+        /// and <see cref="Line"/>), then finishes with <see cref="Group"/>.
+        /// </summary>
+        public void Begin(BoardState s, int[] status)
+        {
+            Clear();
+            phase = s.phase; label = s.PhaseLabel();
+            for (int p = 0; p < map.powerCount; p++) powerStatus[p] = status == null ? S_ORDERS : status[p];
+            for (int p = 0; p < map.provCount; p++) { provType[p] = -1; provItem[p] = -1; }
+            for (int u = 0; u < s.unitCount; u++) provType[map.locProv[s.unitLoc[u]]] = s.unitType[u];
+        }
+
+        /// <summary>Adds a line in words. pw is the power it concerns, or -1 for everybody (read first).</summary>
+        public void Note(int pw, string text)
+        {
+            int i = AddLine(pw, -1, -1, K_NOTE, -1, -1, false);
+            if (i >= 0) note[i] = text;
+        }
+
+        /// <summary>Adds an order line (K_*) with its outcome (O_*). Returns its index, or -1.</summary>
+        public int Line(int pw, int type, int from, int k, int va, int vb, int result)
+        {
+            int i = AddLine(pw, type, from, k, va, vb, false);
+            if (i >= 0) outcome[i] = result;
             return i;
         }
 
@@ -158,10 +193,13 @@ namespace Parley.Engine
                 for (int u = 0; u < s.unitCount; u++)
                 {
                     int k = adj.oType[u];
+                    if (k == Adjudicator.CONVERT) k = K_CONVERT;
+                    else if (k == Adjudicator.BESIEGE) k = K_BESIEGE;
+                    else if (k == Adjudicator.LIFT_SIEGE) k = K_LIFT;
                     int i = AddLine(s.unitPower[u], s.unitType[u], s.unitLoc[u], k, adj.oA[u], adj.oB[u], adj.oVia[u]);
                     if (i < 0) continue;
                     provItem[map.locProv[s.unitLoc[u]]] = i;
-                    if (k == K_MOVE) moveTo[i] = adj.oA[u];
+                    if (k == K_MOVE || k == K_CONVERT) moveTo[i] = adj.oA[u];
                     if ((k == K_SUPPORT_HOLD || k == K_SUPPORT_MOVE || k == K_CONVOY) && adj.oA[u] >= 0 && adj.oA[u] < map.provCount)
                         otherType[i] = provType[adj.oA[u]];
                 }
@@ -197,7 +235,7 @@ namespace Parley.Engine
         {
             if (phase == BoardState.PHASE_MOVE)
             {
-                for (int i = 0; i < count; i++)
+                for (int i = 0; i < count && i < adj.resCount; i++)
                 {
                     outcome[i] = adj.rStatus[i];
                     moved[i] = adj.rMoved[i];
@@ -224,9 +262,17 @@ namespace Parley.Engine
                     AddLine(adj.autoDisbandPower[n], provType[map.locProv[loc]], loc, K_AUTO_REMOVE, loc, -1, false);
                 }
             }
-            // reading order: country by country, lines in their original order within a country
+            Group();
+        }
+
+        /// <summary>
+        /// Works out the reading order: lines for everybody first, then country by
+        /// country, lines in their original order within a country.
+        /// </summary>
+        public void Group()
+        {
             int k = 0; groupCount = 0;
-            for (int p = 0; p < map.powerCount; p++)
+            for (int p = -1; p < map.powerCount; p++)
             {
                 int first = k;
                 for (int i = 0; i < count; i++) if (power[i] == p) { seq[k] = i; k++; }
@@ -269,7 +315,7 @@ namespace Parley.Engine
         // Words
         // =====================================================================
 
-        private string UnitWord(int type) { return type == MapData.FLEET ? "Fleet" : (type == MapData.ARMY ? "Army" : "Unit"); }
+        private string UnitWord(int type) { return type == MapData.FLEET ? "Fleet" : (type == MapData.ARMY ? "Army" : (type == MapData.GARRISON ? "Garrison" : "Unit")); }
 
         private string ProvName(int p) { return p >= 0 && p < map.provCount ? map.provName[p] : "?"; }
 
@@ -290,6 +336,10 @@ namespace Parley.Engine
             if (k == K_REMOVE) return "Removes the " + UnitWord(unitType[i]).ToLower() + " in " + map.LocName(a[i]);
             if (k == K_WAIVE) return "Waives a build";
             if (k == K_AUTO_REMOVE) return unit + " is removed (no removal was ordered)";
+            if (k == K_CONVERT) return unit + " converts to " + (b[i] == MapData.GARRISON ? "a garrison" : (b[i] == MapData.FLEET ? "a fleet" : "an army"));
+            if (k == K_BESIEGE) return unit + " besieges the city";
+            if (k == K_LIFT) return unit + " lifts the siege";
+            if (k == K_NOTE) return note[i];
             return "";
         }
 

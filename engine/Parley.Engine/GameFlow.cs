@@ -829,9 +829,7 @@ namespace Parley.Engine
                 if (sealedOrders && sealText[p] != "" && !opened[p]) unopened[p]++;
             }
             history.SetLatestOrders(rules.OrdersText(state, -1));
-            announce.Capture(state, adj, handIn);
-            rules.Resolve(state, lastDiceSeed);
-            announce.Finish(adj);
+            rules.Resolve(state, lastDiceSeed, announce, handIn);
             history.Push(codec.EncodeBody(state));
             if (maxArchiveChars > 0) history.TrimTo(maxArchiveChars);
             ClearPhaseData();

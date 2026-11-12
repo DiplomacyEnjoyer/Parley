@@ -105,15 +105,47 @@ namespace Parley.Engine
 
         private bool FleetAtSea(BoardState s, int prov)
         {
-            if (map.provType[prov] != MapData.SEA) return false;
+            if (!CanCarry(prov)) return false;
             int u = s.provUnit[prov];
             return u >= 0 && s.unitType[u] == MapData.FLEET;
+        }
+
+        // Can a fleet standing in this province take part in a convoy?
+        private bool CanCarry(int prov)
+        {
+            return map.provType[prov] == MapData.SEA || (map.coastConvoy && map.provType[prov] == MapData.COAST);
         }
 
         private bool CanReach(BoardState s, int u, int prov)
         {
             if (s.unitType[u] == MapData.ARMY) return map.provType[prov] != MapData.SEA && map.ArmyAdjacent(map.locProv[s.unitLoc[u]], prov);
+            if (s.unitType[u] == MapData.GARRISON) return map.cityProv[map.locProv[s.unitLoc[u]]] == prov;
             return map.FleetCanReachProv(s.unitLoc[u], prov);
+        }
+
+        /// <summary>
+        /// What can unit u convert into (rulesets with walled cities)? optA = where it ends
+        /// up (the city entry, or a place in the province outside), optB = the unit type
+        /// it becomes. Empty when the unit has no city to enter or leave.
+        /// </summary>
+        public int ListConversions(BoardState s, int u)
+        {
+            optCount = 0;
+            int loc = s.unitLoc[u]; int p = map.locProv[loc]; int type = s.unitType[u];
+            if (type == MapData.GARRISON)
+            {
+                int outside = map.provSingle[p] ? p : map.cityProv[p];
+                if (outside < 0) return 0;
+                Add(outside, MapData.ARMY);
+                if (map.cityPort[p])
+                    for (int l = 0; l < map.locCount; l++)
+                        if (map.locProv[l] == outside && map.FleetCanStand(l)) Add(l, MapData.FLEET);
+                return optCount;
+            }
+            if (type == MapData.FLEET && !map.cityPort[p]) return 0;
+            if (map.provSingle[p]) { if (map.cityKind[p] == MapData.CITY_WALLED) Add(p, MapData.GARRISON); }
+            else if (map.provCity[p] >= 0 && s.provUnit[map.provCity[p]] < 0) Add(map.provCity[p], MapData.GARRISON);
+            return optCount;
         }
 
         /// <summary>Which units could unit u support? optA = province of that unit.</summary>
@@ -141,6 +173,13 @@ namespace Parley.Engine
             int sp = map.locProv[s.unitLoc[u]];
             if (t < 0 || t == u) return 0;
             if (CanReach(s, u, targetProv)) Add(-1, 0);
+            if (s.unitType[t] == MapData.GARRISON)
+            {
+                // a garrison's only move is out of its city into the province around it
+                int outside = map.cityProv[targetProv];
+                if (outside >= 0 && outside != sp && CanReach(s, u, outside)) Add(outside, 0);
+                return optCount;
+            }
             if (s.unitType[t] == MapData.FLEET)
             {
                 int loc = s.unitLoc[t];
@@ -161,7 +200,7 @@ namespace Parley.Engine
                 Add(d, 0);
             }
             // convoyed moves: a fleet cannot support a move that would have to be convoyed by itself
-            int skip = (s.unitType[u] == MapData.FLEET && map.provType[sp] == MapData.SEA) ? sp : -1;
+            int skip = (s.unitType[u] == MapData.FLEET && CanCarry(sp)) ? sp : -1;
             MarkConvoyReach(s, targetProv, skip);
             for (int d = 0; d < map.provCount; d++)
             {
@@ -181,7 +220,7 @@ namespace Parley.Engine
         public int ListConvoyArmies(BoardState s, int u)
         {
             int n = 0;
-            if (s.unitType[u] == MapData.FLEET && map.provType[map.locProv[s.unitLoc[u]]] == MapData.SEA)
+            if (s.unitType[u] == MapData.FLEET && CanCarry(map.locProv[s.unitLoc[u]]))
             {
                 for (int a = 0; a < s.unitCount; a++)
                 {
@@ -201,7 +240,7 @@ namespace Parley.Engine
         {
             optCount = 0;
             if (s.unitType[u] != MapData.FLEET) return 0;
-            if (map.provType[map.locProv[s.unitLoc[u]]] != MapData.SEA) return 0;
+            if (!CanCarry(map.locProv[s.unitLoc[u]])) return 0;
             int a = s.provUnit[armyProv];
             if (a < 0 || s.unitType[a] != MapData.ARMY) return 0;
             MarkConvoyReach(s, armyProv, -1);

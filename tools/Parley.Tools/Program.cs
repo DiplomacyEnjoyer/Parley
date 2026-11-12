@@ -15,6 +15,10 @@ static int Usage()
                                                 match a jDip-style board picture to a map (for the web client)
           parley import-jdip <pack.zip> [variant] [out.pmap] [id]
                                                 convert a jDip variant (no variant: list them); writes out.art.json too
+          parley import-njudge-mach <map.machiavelli> <seed.9> <out.pmap> [id]
+                                                convert the nJudge Renaissance-Italy board (Purse and Dagger ruleset)
+          parley purse-sim <file.pmap> [games] [seed] [years]
+                                                random play of the Purse and Dagger ruleset with consistency checks
           parley check-map <file.pmap>          load a map and print a summary
           parley sim <file.pmap> [games] [seed] [maxYears] [basic|random]
                                                 play bot games; checks + per-power statistics
@@ -68,6 +72,26 @@ switch (args[0])
             SvgArt.Write(art, args[3]);
             Console.WriteLine($"wrote {args[3]}: {art.Provs.Count} province shapes, {art.Units.Count} unit positions, {art.Centres.Count} centre markers");
             return 0;
+        }
+    case "import-njudge-mach":
+        {
+            if (args.Length < 4) return Usage();
+            var res = NjudgeMachImporter.Import(args[1], args[2], args.Length > 4 ? args[4] : "italy1454");
+            foreach (var w in res.Warnings) Console.WriteLine("warning: " + w);
+            var map = new Parley.Engine.MapData();
+            if (!map.Load(res.Pmap)) { Console.WriteLine("converted map does not load: " + map.error); File.WriteAllText(args[3] + ".failed", res.Pmap); return 1; }
+            File.WriteAllText(args[3], res.Pmap);
+            Console.WriteLine($"wrote {args[3]}: {map.landCount} provinces, {map.provCount - map.landCount} walled cities, {map.powerCount} powers");
+            return 0;
+        }
+    case "purse-sim":
+        {
+            if (args.Length < 2) return Usage();
+            var rep = PurseSim.Run(File.ReadAllText(args[1]), args.Length > 2 ? int.Parse(args[2]) : 20, args.Length > 3 ? int.Parse(args[3]) : 1, args.Length > 4 ? int.Parse(args[4]) : 12);
+            foreach (var pr in rep.Problems) Console.WriteLine("PROBLEM " + pr);
+            Console.WriteLine($"{rep.Games} games, {rep.Phases} phases, {rep.Finished} finished, {rep.Problems.Count} problems");
+            Console.WriteLine(string.Join(", ", rep.Seen.OrderByDescending(k => k.Value).Select(k => k.Key + " " + k.Value)));
+            return rep.Problems.Count == 0 ? 0 : 1;
         }
     case "import-jdip":
         {

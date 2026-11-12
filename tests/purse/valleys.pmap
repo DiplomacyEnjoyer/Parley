@@ -1,0 +1,67 @@
+parleymap 1
+# Three Valleys: a small original board for testing the Purse and Dagger ruleset.
+# Not meant to be played for fun. CC BY-SA 4.0 like the other maps here.
+id valleys
+name Three Valleys (test board)
+license CC BY-SA 4.0
+rules purse loans assassins
+seasons Spring Summer Fall Winter
+convoy coastal
+start 1400
+victory 5
+power red Red #c8553d Redmark
+power blue Blue #2f6690 Bluemark
+power green Green #3a7d44 Greenmark
+power auto Autonomous #8a8a8a Autonomous
+x autonomous auto
+prov rcap c red Redkeep
+prov rfield l red Redfields
+prov rtown c red Redhaven
+prov bcap l blue Bluekeep
+prov bfield l blue Bluefields
+prov bport c blue Blueport
+prov gcap c green Greenkeep
+prov gfield l green Greenfields
+prov mid l * Midmarch
+prov pass l * The Pass
+prov isle c * Lagoon Isle
+prov bay s - The Bay
+prov sound s - The Sound
+city rcap walled 2 port
+city rtown open 1 port
+city bcap walled 1
+city bport walled 1 port
+city gcap walled 3 port
+city mid walled 1
+city isle walled 3 port single
+army rcap: rfield rtown
+army rfield: rtown mid pass
+army rtown: pass
+army mid: pass bfield gfield
+army pass: bcap gfield
+army bcap: bfield bport
+army bfield: bport gfield
+army gcap: gfield
+fleet bay: rcap rtown bport isle sound
+fleet sound: bport gcap isle
+fleet rcap: rtown
+unit red A rcap
+unit red A rfield
+unit red F rtown
+unit blue A bcap
+unit blue A bfield
+unit blue F bport
+unit green A gcap
+unit green A gfield
+unit auto G mid
+x income red 1 1 2 3 4 5 6
+x income blue 1 1 2 3 4 5 6
+x income green 2 1 1 2 2 3 3
+x income city:isle 1 1 1 2 2 3 3
+x famine 5 - - - rfield - - - bfield - - -
+x famine 7 - - mid - - rcap - - gfield - -
+x famine 9 - - - - pass - - - - - -
+x plague 6 - - - - - bcap - - - - -
+x plague 7 - rtown - - - mid - - - isle -
+x plague 8 - - - - gcap - - - - - -
+x strait bport bay sound

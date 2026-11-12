@@ -21,6 +21,7 @@ public sealed class Game
     public BoardState Scratch;
     public Ruleset Rules;
     public StandardRules Standard;
+    public PurseRules Purse;
     public Dice Dice;
 
     public static Game FromPmap(string pmapText, Dictionary<string, List<string>> aliases = null)
@@ -47,8 +48,11 @@ public sealed class Game
         g.Announce = new Announcement(); g.Announce.Init(map);
         g.Dice = new Dice(); g.Dice.Init(g.Seal);
         g.Standard = new StandardRules();
+        g.Purse = new PurseRules();
         g.Rules = new Ruleset();
-        if (!g.Rules.Init(map, g.Adj, g.Codec, g.Dice, g.Standard)) throw new InvalidDataException(g.Rules.error);
+        if (!g.Rules.Init(map, g.Adj, g.Codec, g.Dice, g.Standard, g.Purse)) throw new InvalidDataException(g.Rules.error);
+        g.Rules.Attach(g.State); g.Rules.Attach(g.Scratch);
+        g.Rules.SetupStart(g.State);
         g.Flow = new GameFlow(); g.Flow.Init(map, g.State, g.Adj, g.Codec, g.History, g.Scratch, g.Seal, g.Announce, g.Rules, g.Dice);
         return g;
     }

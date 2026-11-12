@@ -28,6 +28,7 @@ namespace Parley.Engine
     public class Ruleset : UdonSharpBehaviour
     {
         public const int KIND_STANDARD = 0;
+        public const int KIND_PURSE = 1;
 
         public int kind;
         public string error = "";
@@ -37,43 +38,60 @@ namespace Parley.Engine
         public GameCodec codec;
         public Dice dice;
         public StandardRules standard;
+        public PurseRules purse;
 
         /// <summary>
         /// Chooses the module the board asks for. Returns false (see error) if this
         /// version of the game does not have it.
         /// </summary>
-        public bool Init(MapData m, Adjudicator a, GameCodec c, Dice d, StandardRules standardModule)
+        public bool Init(MapData m, Adjudicator a, GameCodec c, Dice d, StandardRules standardModule, PurseRules purseModule)
         {
-            map = m; adj = a; codec = c; dice = d; standard = standardModule; error = "";
+            map = m; adj = a; codec = c; dice = d; standard = standardModule; purse = purseModule; error = "";
             kind = KIND_STANDARD;
             standard.Init(m, a, c);
+            if (m.rulesId == "purse")
+            {
+                kind = KIND_PURSE;
+                if (!purse.Init(m, a, c, d)) { error = purse.error; return false; }
+                return true;
+            }
             if (m.rulesId != "standard") { error = "this board needs the ruleset '" + m.rulesId + "', which this version of the game does not have"; return false; }
             return true;
         }
 
         /// <summary>Name of the ruleset, for menus.</summary>
-        public string Title() { return standard.Title(); }
+        public string Title() { return kind == KIND_PURSE ? purse.Title() : standard.Title(); }
 
         /// <summary>Makes room in a board for the numbers this ruleset keeps. Call once for every BoardState.</summary>
-        public void Attach(BoardState s) { }
+        public void Attach(BoardState s) { if (kind == KIND_PURSE) purse.Attach(s); }
 
-        public void SetupStart(BoardState s) { standard.SetupStart(s); }
+        public void SetupStart(BoardState s) { if (kind == KIND_PURSE) purse.SetupStart(s); else standard.SetupStart(s); }
 
         /// <summary>Does resolving a phase need dice? If so every player's device must contribute to the seed.</summary>
-        public bool UsesDice(BoardState s) { return false; }
+        public bool UsesDice(BoardState s) { return kind == KIND_PURSE && purse.UsesDice(s); }
 
         /// <summary>Can a player sit in this seat? (False for powers the rules run themselves.)</summary>
-        public bool Playable(int power) { return power >= 0 && power < map.powerCount; }
+        public bool Playable(int power)
+        {
+            if (power < 0 || power >= map.powerCount) return false;
+            return kind != KIND_PURSE || purse.Playable(power);
+        }
 
-        public bool NeedsOrders(BoardState s, int power) { return standard.NeedsOrders(s, power); }
+        public bool NeedsOrders(BoardState s, int power) { return kind == KIND_PURSE ? purse.NeedsOrders(s, power) : standard.NeedsOrders(s, power); }
 
         /// <summary>Is this power out of the game?</summary>
-        public bool IsOut(BoardState s, int power) { return standard.IsOut(s, power); }
+        public bool IsOut(BoardState s, int power) { return kind == KIND_PURSE ? purse.IsOut(s, power) : standard.IsOut(s, power); }
 
-        public void ClearOrders() { standard.ClearOrders(); }
+        public void ClearOrders() { if (kind == KIND_PURSE) purse.ClearOrders(); else standard.ClearOrders(); }
 
         public bool AddOrders(string text, BoardState s, int power)
         {
+            if (kind == KIND_PURSE)
+            {
+                bool fine = purse.AddOrders(text, s, power);
+                error = fine ? "" : purse.error;
+                return fine;
+            }
             bool ok = standard.AddOrders(text, s, power);
             error = ok ? "" : codec.error;
             return ok;
@@ -88,16 +106,21 @@ namespace Parley.Engine
             return ok;
         }
 
-        public string OrdersText(BoardState s, int power) { return standard.OrdersText(s, power); }
+        public string OrdersText(BoardState s, int power) { return kind == KIND_PURSE ? purse.OrdersText(s, power) : standard.OrdersText(s, power); }
 
         /// <summary>
         /// Resolves the phase the board is in with the orders entered, and moves the
-        /// board on. seed is the phase's dice seed ("" if the ruleset uses no dice).
+        /// board on. seed is the phase's dice seed ("" if the ruleset uses no dice). The
+        /// announcement is filled in with what was ordered and what became of it; status
+        /// says how each power's sheet arrived (Announcement.S_*), or is null.
         /// </summary>
-        public void Resolve(BoardState s, string seed)
+        public void Resolve(BoardState s, string seed, Announcement announce, int[] status)
         {
             dice.Begin(seed);
+            if (kind == KIND_PURSE) { purse.Resolve(s, announce, status); return; }
+            announce.Capture(s, adj, status);
             standard.Resolve(s);
+            announce.Finish(adj);
         }
 
         /// <summary>Which movement phase of the game the board is in (0 = the first); the clock schedule goes by this.</summary>
