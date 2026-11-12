@@ -105,6 +105,7 @@ namespace Parley.Engine
 
         // scratch
         private int[] best; private int[] bestCount; private int[] counter; private bool[] mark; private bool[] heldBy; private bool[] newSiege;
+        private bool[] fresh; // per province: its rebellion broke out in the campaign being resolved
         private int[] tmpPow; private string[] items;
 
         // =====================================================================
@@ -181,7 +182,7 @@ namespace Parley.Engine
             adPower = new int[cap]; adBuild = new int[cap]; adType = new int[cap]; adClass = new int[cap]; adLoc = new int[cap];
             killed = new bool[np];
             best = new int[m.locCount]; bestCount = new int[m.locCount]; counter = new int[m.locCount];
-            mark = new bool[m.provCount]; heldBy = new bool[m.provCount]; newSiege = new bool[m.provCount];
+            mark = new bool[m.provCount]; heldBy = new bool[m.provCount]; newSiege = new bool[m.provCount]; fresh = new bool[m.provCount];
             tmpPow = new int[np];
             ClearOrders();
             return true;
@@ -623,6 +624,7 @@ namespace Parley.Engine
             // ---- 1 and 2: money and expenses. Notes are collected and added after the unit orders. ----
             ClearMoney();
             for (int p = 0; p < np; p++) if (Alive(s, p)) ReadSheet(sheetText[p], s, p, true);
+            for (int q = 0; q < map.provCount; q++) fresh[q] = false;
             noteCount = 0;
             Bank(s);
             Expenses(s);
@@ -942,6 +944,7 @@ namespace Parley.Engine
         private void Rebel(BoardState s, int q)
         {
             int c = map.provCity[q];
+            fresh[q] = true;
             if (map.provSingle[q]) { if (s.provUnit[q] < 0) s.provFlag[q] = s.provFlag[q] | F_REBEL; return; }
             s.provFlag[q] = s.provFlag[q] | F_REBEL;
             if (c >= 0 && s.provUnit[c] < 0) s.provFlag[c] = s.provFlag[c] | F_REBEL;
@@ -1117,7 +1120,7 @@ namespace Parley.Engine
                 int u = s.provUnit[q];
                 if (u < 0 || s.unitType[u] == MapData.GARRISON) continue;
                 if (s.unitPower[u] != s.owner[q]) { Calm(s, q); ann.Note(-1, "The rebels of " + map.provName[q] + " welcome the troops of " + Name(s.unitPower[u])); }
-                else if (province && heldBy[q] && StoodStill(s, q))
+                else if (province && heldBy[q] && !fresh[q] && StoodStill(s, q)) // it takes a whole campaign: not the one in which the rebels rose
                 {
                     s.provFlag[q] = s.provFlag[q] & ~F_REBEL;
                     ann.Note(-1, "The rebellion in " + map.provName[q] + " is put down");

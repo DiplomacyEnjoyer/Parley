@@ -27,7 +27,15 @@ public sealed class PurseBoard
         Campaign(season, year);
     }
 
-    public void Campaign(int season, int year) { s.phase = BoardState.PHASE_MOVE; s.season = season; s.year = year; Fresh(); }
+    /// <summary>
+    /// True (the default): after each resolved campaign the date is put back, so a test
+    /// can play one situation after another without the year running on into income and
+    /// adjustments. Tests about the calendar switch it off.
+    /// </summary>
+    public bool SameDate = true;
+    private int season0, year0;
+
+    public void Campaign(int season, int year) { s.phase = BoardState.PHASE_MOVE; s.season = season; s.year = year; season0 = season; year0 = year; Fresh(); }
 
     private void Fresh()
     {
@@ -111,6 +119,7 @@ public sealed class PurseBoard
         }
         g.Rules.Resolve(s, seed == "" ? g.Seal.Sha256Hex("no dice expected") : seed, g.Announce, null);
         Fresh();
+        if (SameDate && s.phase == BoardState.PHASE_MOVE) { s.season = season0; s.year = year0; }
         string problem = PurseSim.Check(g);
         Assert.True(problem == null, problem);
         return Notes();
