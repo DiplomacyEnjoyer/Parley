@@ -12,7 +12,10 @@
 #   third_party/svg/diplomacy/  board pictures from the same package (jDip artwork, GPL).
 #   third_party/jdip/           variant packs from jDip 1.6.8 (SourceForge; GPL): XML map
 #                               data plus a board picture per variant
+#   third_party/njudge/         the nJudge adjudicator's Renaissance-Italy board files
+#                               (map.machiavelli, seed.9) and its rules text, for reference
 #   maps-local/standard.pmap    the classic board, converted for Parley
+#   maps-local/italy1454.pmap   the Renaissance-Italy board for the Purse and Dagger ruleset
 #   maps-local/standard.art.json  its picture, matched province by province
 #
 # Usage: ./scripts/fetch-reference-maps.sh          (needs internet, Python 3 with pip, .NET 8)
@@ -57,6 +60,21 @@ PY
   fi
 fi
 
+# The Renaissance-Italy board of the nJudge e-mail adjudicator (for the Purse and Dagger
+# ruleset): its map file and starting position, from the judge's source archive.
+NJUDGE=third_party/njudge
+NJUDGE_URL="https://sourceforge.net/projects/njudge/files/OldFiles/njudge-0.8.10.tar.gz/download"
+if [ ! -f "$NJUDGE/map.machiavelli" ]; then
+  echo "Downloading the nJudge 0.8.10 archive (Renaissance-Italy board data)..."
+  mkdir -p "$NJUDGE" "$TMP/njudge"
+  if curl -fsSL -o "$TMP/njudge.tar.gz" "$NJUDGE_URL" && tar -xzf "$TMP/njudge.tar.gz" -C "$TMP/njudge" ./data/map.machiavelli ./data/seed.9 ./data/rules.machiavelli ./data/info.machiavelli; then
+    cp "$TMP"/njudge/data/map.machiavelli "$TMP"/njudge/data/seed.9 "$TMP"/njudge/data/rules.machiavelli "$TMP"/njudge/data/info.machiavelli "$NJUDGE"/
+    echo "Fetched the nJudge board files into $NJUDGE"
+  else
+    echo "Could not download nJudge from SourceForge; the Renaissance-Italy board is skipped."
+  fi
+fi
+
 if [ "${1:-}" = "--no-install" ]; then exit 0; fi
 
 # Install the classic board (and the other maps that come with a picture) for the web client.
@@ -85,5 +103,8 @@ asiaVariants.zip|Asia|asia
 loeb9Variants.zip|Loeb9|loeb9
 rootzVariants.zip|Root Z|rootz
 LIST
+fi
+if [ -f "$NJUDGE/map.machiavelli" ]; then
+  $TOOL import-njudge-mach "$NJUDGE/map.machiavelli" "$NJUDGE/seed.9" maps-local/italy1454.pmap | grep -E '^wrote|not load' || true
 fi
 echo "Installed into maps-local/. Start the web client and the classic board is the default map."

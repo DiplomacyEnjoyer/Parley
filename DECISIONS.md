@@ -696,3 +696,61 @@ preceding movement phase (decision 26 and `docs/machiavelli-rulings.md`).
   genuine crashes; kept in reserve.
 - **Secret-sharing so that the others can open an absent player's secret.** The real
   fix; needs private channels (see decision 24).
+
+## 26. "Purse and Dagger": the Renaissance ruleset
+
+**What it is.** The mechanics of the board game *Machiavelli* as a ruleset module
+(`PurseRules.cs`) on the pluggable engine of decision 23 and the dice of decision 25:
+three campaigns a year, treasuries, loans, gifts, bribes and counter-bribes, garrisons
+and sieges, rebellions, assassins, famine, plague, home countries, elimination, victory
+by cities and home countries.
+
+**Name.** The mode is called **Purse and Dagger**; internally `purse`. The original
+game's name is its publisher's trademark and is used in this repository only to say
+what the mode is compatible with (as with the standard game, decision 14). *Other
+names considered:* "Signoria" (close to an existing board game), "Condottiere" (an
+existing card game and the name of the AGPL web project), "Intrigue" (an existing
+game). **YOUR CALL** if you prefer another; it appears in `PurseRules.Title()` and the docs.
+
+**Sources.** Mechanics were taken from the rules text the e-mail judges published
+(`rules.machiavelli`, nJudge 0.8.10 on SourceForge). diplom.org (the Diplomatic Pouch
+articles and the newer rules files) could not be reached from this machine. Nothing was
+copied: not the rulebook's wording, not the judge's code, not Condottieri's code (it is
+AGPL-3.0, checked). Every unclear point and every deliberate difference is a numbered
+ruling in `docs/machiavelli-rulings.md`.
+
+**The board** is not drawn or written here. `scripts/fetch-reference-maps.sh` downloads
+the judge's map file and starting position at setup time and
+`parley import-njudge-mach` converts them into `maps-local/italy1454.pmap` (81
+provinces, 35 walled cities, 8 powers and the autonomous garrisons, famine, plague and
+income tables). Without a picture, the web client draws it as dots and lines. Status of
+the files: THIRD_PARTY.md.
+
+**The decisions that matter most** (all in the rulings document with reasons):
+
+1. **Dice only when a campaign's sheets are opened.** Famine and income dice are rolled
+   at the Fall campaign, plague at the Spring campaign. Slightly earlier than the board
+   game, but it closes the free re-roll described in decision 25.
+2. **Units are kept unless dismissed.** The judges demand an explicit "maintain" for
+   every unit; in a live game an idle or absent player would lose their army. Here the
+   treasury pays for everything it can, in board order.
+3. **Expenses are public once opened.** With sealed sheets everyone sees every sheet at
+   the reveal; there is no neutral party to keep failed bribes private.
+4. **A rebellion cannot be put down in the campaign it starts**, or units standing
+   idle would end rebellions before they did anything.
+5. **Simplified:** straits (no permission order; convoys unaffected), convoy routes
+   need not be written out, no fortresses, no per-power limits on special units, and
+   one unclear rule about strength-2 units and sieges is left out.
+
+**How it is tested.** 38 hand-written cases on a small original board
+(`tests/purse/valleys.pmap`, `PurseTests.cs`), each a tricky situation with its ruling;
+random play with consistency checks after every phase (`parley purse-sim`): no
+impossible position, every position survives its game code, and replaying the recorded
+sheets with the same dice gives the same position, over tens of thousands of phases on
+both boards. There is no second implementation to cross-check against (Condottieri
+could not be used), so **the rulings have not been compared with another engine**; a
+human who knows the game should read `docs/machiavelli-rulings.md`.
+
+*Alternative considered:* writing the ruleset as its own referee. Rejected (decision
+23): garrisons-as-spaces lets the DATC-verified referee do all the fighting; the module
+only decides what money does before and what cities, rebels and control do after.
