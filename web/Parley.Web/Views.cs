@@ -16,6 +16,9 @@ public static class Views
         int[] x = map.provX, y = map.provY;
         int w = map.layoutWidth > 0 ? map.layoutWidth : 1000, hgt = map.layoutHeight > 0 ? map.layoutHeight : 1000;
         if (!hasLayout) { (x, y) = AutoLayout.Compute(map); w = 1000; hgt = 1000; }
+        // a walled city is drawn beside the province it stands in
+        x = (int[])x.Clone(); y = (int[])y.Clone();
+        for (int p = map.landCount; p < map.provCount; p++) { x[p] = x[map.cityProv[p]] + 15; y[p] = y[map.cityProv[p]] + 12; }
         var links = new List<int[]>();
         for (int p = 0; p < map.provCount; p++)
             for (int i = 0; i < map.anyCount[p]; i++)
@@ -27,10 +30,14 @@ public static class Views
         {
             id = map.mapId, name = map.mapName, hash = map.hash, credit = map.credit, license = map.license,
             width = w, height = hgt, victory = map.victoryCenters, drawn = hasLayout,
+            rules = map.rulesId, seasons = Seasons(map),
             powers = Enumerable.Range(0, map.powerCount).Select(i => new { id = map.powerId[i], name = map.powerName[i], color = map.powerColor[i] }),
             provs = Enumerable.Range(0, map.provCount).Select(p => new
             {
-                id = map.provId[p], name = map.provName[p], type = map.provType[p], sc = map.provSc[p], home = map.provHome[p],
+                id = map.provId[p], name = map.provName[p], type = map.provType[p], home = map.provHome[p],
+                // in a game with cities the marker under a province is its city, not a supply centre
+                sc = map.rulesId == "standard" ? map.provSc[p] : (p < map.landCount && map.cityKind[p] != MapData.CITY_NONE),
+                city = map.cityKind[p], income = map.cityIncome[p], port = map.cityPort[p], node = map.provCity[p], around = map.cityProv[p],
                 x = x[p], y = y[p], shape = hasLayout ? map.provShape[p] : ""
             }),
             locs = Enumerable.Range(0, map.locCount).Select(l => new { id = map.locId[l], prov = map.locProv[l], coast = map.locCoast[l], name = map.LocName(l) }),
@@ -51,6 +58,7 @@ public static class Views
         {
             id = map.mapId, name = map.mapName, hash = map.hash, credit = map.credit, license = map.license,
             width = art.Width, height = art.Height, victory = map.victoryCenters, drawn = true,
+            rules = map.rulesId, seasons = Seasons(map),
             art = art.Background, labels = art.Labels, artSource = art.Source,
             powers = Enumerable.Range(0, map.powerCount).Select(i => new { id = map.powerId[i], name = map.powerName[i], color = map.powerColor[i] }),
             provs = Enumerable.Range(0, map.provCount).Select(p =>
@@ -73,8 +81,33 @@ public static class Views
         };
     }
 
+    private static object Seasons(MapData map) =>
+        Enumerable.Range(0, map.seasonCount + 1).Select(i => new { letter = map.seasonLetters.Substring(i, 1), name = map.seasonNames[i] }).ToList();
+
     private static object Units(BoardState s) =>
-        Enumerable.Range(0, s.unitCount).Select(u => new { t = s.unitType[u], p = s.unitPower[u], l = s.unitLoc[u] }).ToList();
+        Enumerable.Range(0, s.unitCount).Select(u => new { t = s.unitType[u], p = s.unitPower[u], l = s.unitLoc[u], c = s.unitFlag[u] }).ToList();
+
+    /// <summary>
+    /// What a Purse and Dagger game shows besides the board. All of it is public: every
+    /// device holds the whole position, so nothing in it could be kept secret anyway.
+    /// </summary>
+    private static object PurseInfo(Game g)
+    {
+        if (g.Rules.kind != Ruleset.KIND_PURSE) return null;
+        var s = g.State; var map = g.Map; var pr = g.Purse; int np = map.powerCount;
+        return new
+        {
+            options = pr.Options(s), victoryHomes = pr.victoryHomes, auto = pr.autoPower,
+            treasury = Enumerable.Range(0, np).Select(p => pr.Treasury(s, p)),
+            debt = Enumerable.Range(0, np).Select(p => pr.Debt(s, p)),
+            cities = Enumerable.Range(0, np).Select(p => pr.CitiesHeld(s, p)),
+            homes = Enumerable.Range(0, np).Select(p => pr.HomesHeld(s, p)),
+            homeHolder = Enumerable.Range(0, np).Select(h => pr.HomeHolder(s, h)),
+            income = Enumerable.Range(0, np).Select(p => pr.Alive(s, p) ? pr.FixedIncome(s, p) : 0),
+            flags = s.provFlag.Take(map.provCount),
+            campaign = pr.CampaignNumber(s),
+        };
+    }
 
     private static object Dislodged(BoardState s) =>
         s.phase != BoardState.PHASE_RETREAT ? new List<object>()
@@ -96,7 +129,8 @@ public static class Views
             my = new
             {
                 power = myPower, submitted = f.submitted[myPower], sealedOrders = f.sealText[myPower] != "", opened = f.opened[myPower],
-                needs = f.NeedsOrders(myPower), delta = s.phase == BoardState.PHASE_ADJUST ? g.Adj.AdjustDelta(s, myPower) : 0, options = cached.value
+                needs = f.NeedsOrders(myPower), needsSeal = f.NeedsSeal(myPower),
+                delta = s.phase == BoardState.PHASE_ADJUST && g.Rules.kind == Ruleset.KIND_STANDARD ? g.Adj.AdjustDelta(s, myPower) : 0, options = cached.value
             };
         }
         object announce = null;
@@ -134,11 +168,13 @@ public static class Views
             seats = Enumerable.Range(0, map.powerCount).Select(p => new
             {
                 power = p, name = h.seatName[p], present = f.seatPresent[p], submitted = f.submitted[p], opened = f.opened[p], ready = f.ready[p],
-                needs = f.NeedsOrders(p), vote = f.drawVote[p], units = s.CountUnits(p), centres = s.CountCenters(p), gone = f.stage != GameFlow.STAGE_LOBBY && s.IsEliminated(p)
+                needs = f.NeedsOrders(p), vote = f.drawVote[p], units = s.CountUnits(p), centres = s.CountCenters(p),
+                gone = f.stage != GameFlow.STAGE_LOBBY && g.Rules.IsOut(s, p), playable = g.Rules.Playable(p), unopened = f.unopened[p]
             }),
             units = Units(s), owners = s.owner.Take(map.provCount), dislodged = Dislodged(s),
             code = f.stage == GameFlow.STAGE_LOBBY ? "" : f.CurrentCode(),
             historyCount = h.count, winner = s.winner, drawn = s.drawn,
+            rules = g.Rules.Title(), purse = PurseInfo(g), diceSeed = f.lastDiceSeed,
             announce, my
         };
     }
@@ -161,6 +197,8 @@ public static class Views
     private static object Options(Game g, int power)
     {
         var s = g.State; var map = g.Map; var opt = g.Options;
+        bool purse = g.Rules.kind == Ruleset.KIND_PURSE;
+        if (purse && s.phase == BoardState.PHASE_ADJUST) return PurseAdjustOptions(g, power);
         if (s.phase == BoardState.PHASE_MOVE)
         {
             var units = new List<object>();
@@ -185,8 +223,15 @@ public static class Views
                     int m = opt.ListConvoyDestinations(s, u, ap);
                     con.Add(new { p = ap, to = Enumerable.Range(0, m).Select(i => opt.optA[i]).ToList() });
                 }
-                units.Add(new { l = s.unitLoc[u], t = s.unitType[u], moves, sup, con });
+                n = opt.ListConversions(s, u);
+                var conv = Enumerable.Range(0, n).Select(i => new { l = opt.optA[i], t = opt.optB[i] }).ToList();
+                // sieges: an army, or a fleet at a port, standing outside a walled city
+                int q = map.locProv[s.unitLoc[u]];
+                bool siege = purse && s.unitType[u] != MapData.GARRISON && map.provCity[q] >= 0 && (s.unitType[u] == MapData.ARMY || map.cityPort[q]);
+                bool sieging = purse && siege && (s.provFlag[q] & PurseRules.F_SIEGE) != 0;
+                units.Add(new { l = s.unitLoc[u], t = s.unitType[u], moves, sup, con, conv, siege, sieging });
             }
+            if (purse) return new { units, spend = PurseSpendOptions(g, power) };
             return new { units };
         }
         if (s.phase == BoardState.PHASE_RETREAT)
@@ -211,11 +256,97 @@ public static class Views
         return new { };
     }
 
+    /// <summary>What a power can spend money on in a campaign: targets and the least each would cost.</summary>
+    private static object PurseSpendOptions(Game g, int power)
+    {
+        var s = g.State; var map = g.Map; var pr = g.Purse;
+        bool near = !pr.Has(s, PurseRules.OPT_ADJACENCY);
+        var bribes = new List<object>();
+        for (int u = 0; u < s.unitCount; u++)
+        {
+            int loc = s.unitLoc[u]; int land = pr.LandOf(loc);
+            bool reach = near || pr.Near(s, power, land, false);
+            int d = reach ? pr.MinBribe(s, power, PurseRules.EX_DISBAND, loc) : 0, b = reach ? pr.MinBribe(s, power, PurseRules.EX_BUY, loc) : 0, a = reach ? pr.MinBribe(s, power, PurseRules.EX_AUTONOMOUS, loc) : 0;
+            bool counter = s.unitPower[u] == power || reach;
+            if (d > 0 || b > 0 || a > 0 || counter) bribes.Add(new { l = loc, t = s.unitType[u], p = s.unitPower[u], d, b, a, counter });
+        }
+        var rebel = new List<object>(); var relief = new List<int>(); var pacify = new List<int>();
+        for (int q = 0; q < map.landCount; q++)
+        {
+            if (map.provType[q] == MapData.SEA) continue;
+            int cost = pr.RebellionCost(s, power, q);
+            if (cost > 0 && (near || pr.Near(s, power, q, false))) rebel.Add(new { p = q, cost });
+            bool close = near || pr.Near(s, power, q, true);
+            if ((s.provFlag[q] & PurseRules.F_FAMINE) != 0 && close) relief.Add(q);
+            if (((s.provFlag[q] & PurseRules.F_REBEL) != 0 || pr.CityRebels(s, q)) && close) pacify.Add(q);
+        }
+        var kill = Enumerable.Range(0, map.powerCount).Where(v => v != power && pr.Alive(s, v) && pr.Chits(s, power, v) > 0 && pr.Has(s, PurseRules.OPT_ASSASSINS)).ToList();
+        var others = Enumerable.Range(0, map.powerCount).Where(v => v != power && pr.Alive(s, v)).ToList();
+        var loans = Enumerable.Range(0, PurseRules.MAX_LOANS).Where(i => pr.LoanDue(s, power, i) >= 0)
+            .Select(i => new { principal = pr.LoanPrincipal(s, power, i), interest = pr.LoanInterest(s, power, i), dueIn = pr.LoanDue(s, power, i) - pr.CampaignNumber(s) }).ToList();
+        return new
+        {
+            treasury = pr.Treasury(s, power), debt = pr.Debt(s, power), loans,
+            canBorrow = pr.Has(s, PurseRules.OPT_LOANS) && !pr.Barred(s, power),
+            bribes, rebel, relief, pacify, kill, others,
+            tokens = Enumerable.Range(0, map.powerCount).Select(v => pr.Chits(s, power, v)),
+        };
+    }
+
+    /// <summary>The winter: what each unit costs to keep, and where something new could be built.</summary>
+    private static object PurseAdjustOptions(Game g, int power)
+    {
+        var s = g.State; var map = g.Map; var pr = g.Purse;
+        var mine = Enumerable.Range(0, s.unitCount).Where(u => s.unitPower[u] == power)
+            .Select(u => new { l = s.unitLoc[u], t = s.unitType[u], cost = pr.ClassCost(s.unitFlag[u]) }).ToList();
+        var builds = new List<object>();
+        for (int l = 0; l < map.locCount; l++)
+            for (int t = 0; t < map.unitTypeCount; t++)
+                if ((t != MapData.ARMY || l < map.provCount) && pr.BuildOk(s, power, t, PurseRules.CLASS_NORMAL, l)) builds.Add(new { l, t });
+        // dismissing a unit can make room: its place is offered too, and the engine has the last word
+        return new { purse = true, treasury = pr.Treasury(s, power), unitCost = PurseRules.UNIT_COST, mine, builds };
+    }
+
+    /// <summary>
+    /// A past phase of a game with its own ruleset: replayed through that ruleset, with the
+    /// dice seed the archive recorded, and reported from the announcement.
+    /// </summary>
+    private static object PurseHistoryEntry(WebGame wg, int index)
+    {
+        var g = wg.G; var h = g.History;
+        wg.Replay ??= Game.FromPmap(wg.Info.Pmap);
+        var r = wg.Replay; var s = r.State;
+        if (!r.Codec.DecodeBody(h.body[index], s)) return null;
+        string label = s.PhaseLabel();
+        var units = Units(s); var owners = s.owner.Take(r.Map.provCount).ToList(); var dislodged = Dislodged(s);
+        var flags = s.provFlag.Take(r.Map.provCount).ToList();
+        var orders = new List<object>();
+        bool resolved = index < h.count - 1 && s.phase != BoardState.PHASE_FINISHED;
+        if (resolved)
+        {
+            r.Rules.ClearOrders();
+            if (r.Rules.AddOrders(h.OrdersAt(index), s, -1))
+            {
+                r.Rules.Resolve(s, h.SeedAt(index), r.Announce, null);
+                var an = r.Announce;
+                for (int k = 0; k < an.count; k++)
+                {
+                    int i = an.seq[k];
+                    string res = an.OutcomeText(i);
+                    int kind = an.kind[i] == Announcement.K_CONVERT || an.kind[i] == Announcement.K_RETREAT ? 1 : an.kind[i] <= Announcement.K_CONVOY ? an.kind[i] : 0;
+                    orders.Add(new { p = an.power[i], text = an.Text(i), res = res == "" ? "ok" : res, ok = res == "", k = kind, u = an.fromLoc[i], a = an.kind[i] == Announcement.K_CONVERT ? an.moveTo[i] : an.a[i], b = an.b[i] });
+                }
+            }
+        }
+        return new { index, label, resolved, units, owners, dislodged, orders, flags, code = h.CodeAt(index) };
+    }
+
     /// <summary>One past phase: the position it started from, and every order with its outcome.</summary>
     public static object HistoryEntry(WebGame wg, int index)
     {
         var g = wg.G; var h = g.History; var map = g.Map;
         if (index < 0 || index >= h.count) return null;
+        if (g.Rules.kind != Ruleset.KIND_STANDARD) return PurseHistoryEntry(wg, index);
         var s = new BoardState(); s.Init(map);
         if (!g.Codec.DecodeBody(h.body[index], s)) return null;
         string label = s.PhaseLabel();

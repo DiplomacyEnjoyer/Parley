@@ -20,7 +20,10 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 var app = builder.Build();
 
 string dataDir = Environment.GetEnvironmentVariable("PARLEY_DATA") ?? Path.Combine(root, "web", "data");
-var lobby = new Lobby(new[] { Path.Combine(root, "maps"), Path.Combine(root, "maps-local") }, dataDir);
+// PARLEY_MAPS: extra map folders (separated like PATH), e.g. the test boards in tests/purse
+var mapDirs = new List<string> { Path.Combine(root, "maps"), Path.Combine(root, "maps-local") };
+mapDirs.AddRange((Environment.GetEnvironmentVariable("PARLEY_MAPS") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries));
+var lobby = new Lobby(mapDirs, dataDir);
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -30,7 +33,7 @@ IResult Fail(string message) => Results.Json(new { error = message }, statusCode
 app.MapGet("/api/maps", () => lobby.Maps.Values.OrderBy(m => m.Map.powerCount).ThenBy(m => m.Map.mapName).Select(m => new
 {
     id = m.Map.mapId, name = m.Map.mapName, powers = m.Map.powerCount, provinces = m.Map.provCount, centres = m.Map.scCount,
-    credit = m.Map.credit, art = m.Art != null, isDefault = m.Map.mapId == DefaultMap(lobby)
+    credit = m.Map.credit, art = m.Art != null, isDefault = m.Map.mapId == DefaultMap(lobby), rules = m.Map.rulesId
 }));
 
 // the classic board is the default once it has been fetched; otherwise the first original map

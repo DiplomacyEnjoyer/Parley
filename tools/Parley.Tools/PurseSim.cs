@@ -69,9 +69,12 @@ public static class PurseSim
             // replaying the recorded sheets from the earlier code with the same dice gives the same position
             if (!replay.Codec.DecodeState(before, replay.State)) { rep.Problems.Add($"{label}: earlier code does not load: {replay.Codec.error}"); return; }
             replay.Rules.ClearOrders();
-            string recorded = g.History.orders[g.History.count - 2];
-            if (!replay.Rules.AddOrders(recorded, replay.State, -1)) { rep.Problems.Add($"{label}: recorded sheets do not load: {replay.Rules.error}"); return; }
-            replay.Rules.Resolve(replay.State, f.lastDiceSeed, replay.Announce, null);
+            // (sheets and dice seed are taken from the archive, as somebody checking the game afterwards would)
+            if (!replay.History.LoadArchive(f.Archive(), replay.Scratch)) { rep.Problems.Add($"{label}: archive does not load: {replay.History.error}"); return; }
+            int was = replay.History.count - 2;
+            if (!replay.Rules.AddOrders(replay.History.OrdersAt(was), replay.State, -1)) { rep.Problems.Add($"{label}: recorded sheets do not load: {replay.Rules.error}"); return; }
+            if (replay.History.SeedAt(was) != f.lastDiceSeed) { rep.Problems.Add($"{label}: the archive does not carry the dice seed"); return; }
+            replay.Rules.Resolve(replay.State, replay.History.SeedAt(was), replay.Announce, null);
             if (replay.Codec.EncodeState(replay.State) != code) { rep.Problems.Add($"{label}: replaying the recorded sheets gives a different position\n   {code}\n   {replay.Codec.EncodeState(replay.State)}"); return; }
         }
         if (f.stage == GameFlow.STAGE_FINISHED) rep.Finished++;

@@ -105,6 +105,26 @@ namespace Parley.Engine
             if (count > 0) orders[count - 1] = ordersText;
         }
 
+        /// <summary>
+        /// The sheets resolved in phase i, without the dice seed that may follow them.
+        /// (A phase that used dice is recorded as "sheets+seed", so that anybody holding
+        /// the archive can replay the phase and re-check every roll.)
+        /// </summary>
+        public string OrdersAt(int i)
+        {
+            if (i < 0 || i >= count) return "";
+            int plus = orders[i].IndexOf('+');
+            return plus < 0 ? orders[i] : orders[i].Substring(0, plus);
+        }
+
+        /// <summary>The dice seed phase i was resolved with, or "" if it had no dice.</summary>
+        public string SeedAt(int i)
+        {
+            if (i < 0 || i >= count) return "";
+            int plus = orders[i].IndexOf('+');
+            return plus < 0 ? "" : orders[i].Substring(plus + 1);
+        }
+
         /// <summary>Rolls back: entry "index" becomes the current, open phase again.</summary>
         public void RollBackTo(int index)
         {
@@ -200,7 +220,7 @@ namespace Parley.Engine
                 string e = p[4 + i];
                 int plus = e.IndexOf('+');
                 nb[i] = plus < 0 ? e : e.Substring(0, plus);
-                no[i] = plus < 0 ? "" : e.Substring(plus + 1);
+                no[i] = plus < 0 ? "" : e.Substring(plus + 1); // the sheets, and after another '+' the dice seed if there was one
                 if (!codec.DecodeBody(nb[i], scratch)) { error = "entry " + (i + 1).ToString() + ": " + codec.error; return false; }
             }
             body = nb; orders = no; count = n;

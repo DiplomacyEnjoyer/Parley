@@ -828,7 +828,7 @@ namespace Parley.Engine
                 lastSalt[p] = sealedOrders && opened[p] ? saltText[p] : "";
                 if (sealedOrders && sealText[p] != "" && !opened[p]) unopened[p]++;
             }
-            history.SetLatestOrders(rules.OrdersText(state, -1));
+            history.SetLatestOrders(rules.OrdersText(state, -1) + (lastDiceSeed != "" ? "+" + lastDiceSeed : ""));
             rules.Resolve(state, lastDiceSeed, announce, handIn);
             history.Push(codec.EncodeBody(state));
             if (maxArchiveChars > 0) history.TrimTo(maxArchiveChars);

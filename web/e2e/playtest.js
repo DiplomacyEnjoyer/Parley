@@ -51,7 +51,7 @@ async function startServer(fresh) {
   if (fresh || !dataDir) dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parley-playtest-'));
   const port = base ? +base.split(':').pop() : await freePort();
   base = 'http://127.0.0.1:' + port;
-  server = spawn('dotnet', [DLL], { cwd: ROOT, env: Object.assign({}, process.env, { PARLEY_URL: base, PARLEY_DATA: dataDir, PARLEY_AWAY_SECONDS: String(AWAY) }), stdio: ['ignore', 'pipe', 'pipe'] });
+  server = spawn('dotnet', [DLL], { cwd: ROOT, env: Object.assign({}, process.env, { PARLEY_URL: base, PARLEY_DATA: dataDir, PARLEY_AWAY_SECONDS: String(AWAY), PARLEY_MAPS: path.join(ROOT, 'tests', 'purse') }), stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   server.stdout.on('data', d => out += d); server.stderr.on('data', d => out += d);
   for (let i = 0; i < 100; i++) { try { await fetch(base + '/api/maps'); return out; } catch { await sleep(200); } }
@@ -369,6 +369,129 @@ async function playGame(mapId) {
   for (const p of players) await p.ctx.close().catch(() => { });
 }
 
+// ------------------------------------------------------------------ the Renaissance ruleset (Purse and Dagger)
+// A year on the Three Valleys test board through the page: the opening winter, a spring with a
+// loan, a bribe and an assassination attempt decided by shared dice, garrison conversions by
+// tapping, a server restart in the middle of a campaign, income and a build in the next winter.
+async function playPurse(mapId) {
+  log(`=== ${mapId} (Purse and Dagger) ===`);
+  const players = [];
+  const host = await newPlayer(mapId + '/P0'); players.push(host);
+  await host.page.goto(base);
+  await host.page.selectOption('#nMap', mapId);
+  await host.page.fill('#nTitle', 'Playtest ' + mapId);
+  await host.page.fill('#nSched', '2'); await host.page.fill('#nRet', '0.5'); await host.page.fill('#nAdj', '2');
+  await host.page.selectOption('#nAnn', 'fast');
+  await host.page.click('#nGo'); await host.page.waitForSelector('#jName');
+  const url = host.page.url(); const gid = new URL(url).searchParams.get('g');
+  await joinAndSit(host, url, 'Ada', 0);
+  for (let i = 1; i < 3; i++) { const p = await newPlayer(`${mapId}/P${i}`); players.push(p); await joinAndSit(p, url, ['Bo', 'Cy'][i - 1], i); }
+  check(!(await host.page.$('[data-seat="3"]')), 'the autonomous garrisons have no seat to take');
+  check(!(await api(`/api/games/${gid}/seat`, { token: host.token, power: 3 })).ok, 'and the server refuses anyone who asks for it');
+  const [ada, bo, cy] = players;
+  const unitAt = (s, id) => { const i = s.unitsById[id]; return i; };
+  const st = async p => p.page.evaluate(() => Object.assign({}, S, { unitsById: Object.fromEntries(S.units.map(u => [M.locs[u.l].id, u])) }));
+  const everyoneSubmits = async serial => { for (const p of players) if ((await state(p)).my && (await state(p)).my.needs) await toggleSubmit(p, true); return nextPhase(host, 120000, serial); };
+
+  // ---- the opening winter: income has been paid, every unit must be paid for
+  await host.page.click('#hStart');
+  await waitFor(host, () => S.stage === 1 && S.my);
+  let s = await st(host);
+  check(s.label === 'W1399A' && s.rules === 'Purse and Dagger', 'the game opens in the winter before the first spring: ' + s.label);
+  check(JSON.stringify(s.purse.treasury.slice(0, 3)) === '[9,8,9]', 'opening income: ' + s.purse.treasury);
+  check(await host.page.evaluate(() => seasonName(S.label)) === 'Winter of year 1399, paying the troops', 'the page names the phase');
+  check(!!(await host.page.$('#mDis')), 'the treasury panel is shown in winter');
+  s = await everyoneSubmits(s.serial);
+  await readyAll(players);
+  s = await st(host);
+  check(s.label === 'S1400M', 'then the first spring campaign: ' + s.label);
+  check(JSON.stringify(s.purse.treasury.slice(0, 3)) === '[0,2,0]', 'everybody paid 3 ducats a unit: ' + s.purse.treasury);
+  check(!s.unitsById.bport && s.seats[1].units === 2, 'Blue could not pay for its third unit, which went home');
+  const winter = await lastResults(host);
+  check(winter.orders.some(o => /Blueport is removed/.test(o.text)), 'the history says so: ' + winter.orders.map(o => o.text).join(' | '));
+
+  // ---- spring: a loan and a bribe (Ada), a move by tapping, a loan and an assassination attempt (Cy)
+  log('spring: loan, bribe, assassination attempt');
+  const serial1 = s.serial;
+  await ada.page.selectOption('#bKind', 'B1'); await ada.page.fill('#bAmt', '20'); await ada.page.click('#bAdd');
+  await ada.page.selectOption('#xKind', 'd');
+  await ada.page.evaluate(() => { const t = [...$('#xTarget').options].find(o => o.textContent.includes('Bluefields')); $('#xTarget').value = t.value; $('#xTarget').onchange(); });
+  check(await ada.page.$eval('#xAmt', e => e.value) === '12', 'the panel proposes the least a bribe must be');
+  await ada.page.click('#xAdd');
+  await tap(ada, 'rfield'); await ada.page.click('#actions button[data-a="move"]'); await tap(ada, 'pass');
+  const adaSheet = await ada.page.evaluate(() => encodeSheet(myOrders, S.my.power));
+  check(/!B120,Ed..12$/.test(adaSheet), 'the sheet carries unit orders, then the money orders: ' + adaSheet);
+  await cy.page.selectOption('#bKind', 'B1'); await cy.page.fill('#bAmt', '12'); await cy.page.click('#bAdd');
+  await cy.page.selectOption('#xKind', 'a'); await cy.page.click('#xAdd');
+  const cySheet = await cy.page.evaluate(() => encodeSheet(myOrders, S.my.power));
+  check(/^!B112,Ea0012$/.test(cySheet), "Cy's sheet: " + cySheet);
+  await toggleSubmit(ada, true); await toggleSubmit(cy, true);
+  await secrecyCheck(gid, players, [adaSheet, cySheet]);
+
+  // ---- the server stops and starts in the middle of the campaign: same phase, same clock, the seals still count
+  log('server restart in mid-campaign');
+  const left = (await state(ada)).secondsLeft;
+  await stopServer(); await startServer(false);
+  await sleep(2500);
+  await waitFor(ada, () => S.stage === 1 && S.my, null, 30000);
+  s = await st(ada);
+  check(s.label === 'S1400M' && s.my.submitted, 'after a restart the campaign goes on and the published seal still counts');
+  check(s.secondsLeft > 0 && s.secondsLeft <= left, 'with the time that was left on the clock: ' + s.secondsLeft + ' of ' + left);
+  await toggleSubmit(bo, true);
+  s = await nextPhase(host, 120000, serial1);
+  await readyAll(players);
+  s = await st(host);
+  check(s.label === 'U1400M', 'summer follows spring: ' + s.label);
+  check(!s.unitsById.bfield, 'the bribed army has disbanded');
+  check(s.purse.treasury[0] === 8 && s.purse.debt[0] === 24, "Ada's books: 20 borrowed, 12 spent, 24 owed: " + s.purse.treasury[0] + ' / ' + s.purse.debt[0]);
+  check(s.purse.treasury[2] === 0 && s.purse.debt[2] === 15, "Cy's books: " + s.purse.treasury[2] + ' / ' + s.purse.debt[2]);
+  check(/^[0-9a-f]{64}$/.test(s.diceSeed), 'the campaign had a dice seed built from the sealed sheets');
+  const spring = await lastResults(host);
+  const said = spring.orders.map(o => o.text).join(' | ');
+  const killed = /ruler of Redmark is assassinated/.test(said);
+  check(killed || /attempt on the ruler of Redmark fails/.test(said), 'the assassination attempt was rolled for: ' + said);
+  check(killed ? !!s.unitsById.rfield : !!s.unitsById.pass, killed ? "a murdered ruler's units did not move" : "Ada's army walked to the Pass");
+  const archive = String((await api(`/api/games/${gid}/archive`)).data);
+  check(archive.includes('+' + s.diceSeed), 'the archive records the dice seed, so anybody can replay the campaign');
+
+  // ---- summer: an army shuts itself in its city
+  log('summer and fall: conversions by tapping');
+  await tap(ada, 'rcap'); await ada.page.click('#actions button[data-a="conv"]'); await ada.page.click('#actions button[data-p="0"]');
+  check(/converts to a garrison/.test(await ada.page.$eval('#side', e => e.textContent)), 'the sheet shows the conversion');
+  s = await everyoneSubmits((await state(host)).serial);
+  await readyAll(players);
+  s = await st(host);
+  check(s.unitsById.rcap_c && s.unitsById.rcap_c.t === 2 && !s.unitsById.rcap, 'the army is now a garrison in the city');
+  check((await host.page.$$('#svg rect')).length > 0, 'and is drawn on the board');
+  // ---- fall: it comes out again (the only unit in the province is the one in the city, so one tap finds it)
+  await tap(ada, 'rcap'); await ada.page.click('#actions button[data-a="conv"]');
+  const picks = await ada.page.$$eval('#actions button[data-p]', b => b.map(x => x.textContent));
+  check(picks.length === 2 && /an army/.test(picks[0]) && /a fleet/.test(picks[1]), 'a garrison in a port may come out as army or fleet: ' + picks);
+  await ada.page.click('#actions button[data-p="1"]');
+  s = await everyoneSubmits((await state(host)).serial);
+  await waitFor(host, () => S.stage === 1 && S.my);
+  s = await st(host);
+  check(s.label === 'W1400A', 'after fall comes the winter: ' + s.label);
+  check(s.unitsById.rcap && s.unitsById.rcap.t === 1, 'the garrison came out as a fleet');
+  check(s.purse.treasury[0] > 8, 'income arrived: ' + s.purse.treasury[0]);
+
+  // ---- winter: Cy buys a garrison if the treasury allows, through the panel
+  const canBuild = await cy.page.evaluate(() => S.my.options.builds.length);
+  const before = (await st(host)).seats[2].units;
+  if (canBuild && s.purse.treasury[2] >= 9) { await cy.page.click('#mNewGo'); check(/Build/.test(await cy.page.$eval('#side', e => e.textContent)), 'the build is on the sheet'); }
+  s = await everyoneSubmits(s.serial);
+  await readyAll(players);
+  s = await st(host);
+  check(s.label === 'S1401M', 'and a new year: ' + s.label);
+  if (canBuild && before && s.seats[2].units) check(s.seats[2].units >= before, 'units were paid for (and perhaps one built): ' + before + ' -> ' + s.seats[2].units);
+  check(s.purse.debt[0] > 0, 'the loans are still on the books, due this spring');
+  // the code of a position with money in it loads again
+  const code = s.code;
+  check(code.split('.').length === 11, 'a game code of this ruleset has its extra sections: ' + code.split('.').length);
+  if (SHOTS) await host.page.screenshot({ path: path.join(SHOTS, mapId + '.png') });
+  for (const p of players) await p.ctx.close();
+}
+
 async function sealHonest(gid, cheat) {
   const cs = (await api(`/api/games/${gid}/state?token=${cheat.token}`)).data;
   if (!(cs.my && cs.my.needs && !cs.my.submitted && (cs.stage === 1 || cs.stage === 2))) return;
@@ -393,7 +516,10 @@ function openWhenRevealed(gid, cheat) {
   await startServer(true);
   browser = await chromium.launch();
   for (const m of MAPS) {
-    try { await playGame(m); }
+    try {
+      const info = (await api('/api/maps')).data.find(x => x.id === m);
+      if (info && info.rules === 'purse') await playPurse(m); else await playGame(m);
+    }
     catch (e) { check(false, `${m}: ${e.message.split('\n')[0]}`); }
     if (!server) await startServer(true);
   }

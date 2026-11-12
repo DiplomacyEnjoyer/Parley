@@ -101,7 +101,16 @@ async function api(path, body) {
   return data;
 }
 const fmtTime = s => s < 0 ? "no time limit" : Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
-const seasonName = l => l === "Lobby" ? "Lobby" : ({ S: "Spring", F: "Fall", W: "Winter" }[l[0]] + " of year " + l.slice(1, -1) + ", " + ({ M: "orders", R: "retreats", A: "builds", X: "game over" }[l.slice(-1)]));
+const isPurse = () => M && M.rules === "purse";   // the Renaissance ruleset: money, garrisons, sieges
+const seasonName = l => {
+  if (l === "Lobby") return "Lobby";
+  const se = ((M && M.seasons) || []).find(x => x.letter === l[0]);
+  const what = { M: isPurse() ? "campaign" : "orders", R: "retreats", A: isPurse() ? "paying the troops" : "builds", X: "game over" }[l.slice(-1)];
+  return (se ? se.name : l[0]) + " of year " + l.slice(1, -1) + ", " + what;
+};
+const unitWord = t => ["Army", "Fleet", "Garrison"][t] || "Unit";
+// a walled city is its own space inside a province; on the board it belongs to the province around it
+const land = p => (M.provs[p].around >= 0 ? M.provs[p].around : p);
 const minutes = v => String(v).split(",").map(x => Math.round(60 * +x.trim())).filter(x => !isNaN(x));
 
 // ------------------------------------------------------------------ SHA-256 (plain JavaScript, so it also works on http:// LAN addresses)
@@ -136,8 +145,16 @@ const DIG = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const enc2 = v => DIG[Math.floor(v / 62)] + DIG[v % 62];
 const encPower = p => M.powers.length < 61 ? DIG[p + 1] : enc2(p + 1);
 function encodeSheet(orders, power) {
+  const money = orders.filter(o => o.k === "$").map(o => o.item);
+  const units = encodeUnitOrders(orders.filter(o => o.k !== "$"), power);
+  return money.length ? units + "!" + money.join(",") : units;
+}
+function encodeUnitOrders(orders, power) {
   return orders.map(o => {
     switch (o.k) {
+      case "x": return enc2(o.u) + "x" + enc2(o.a) + enc2(o.b);
+      case "b": return enc2(o.u) + "b";
+      case "l": return enc2(o.u) + "l";
       case "m": return enc2(o.u) + (o.via ? "v" : "m") + enc2(o.a);
       case "s": return enc2(o.u) + "s" + enc2(o.a);
       case "t": return enc2(o.u) + "t" + enc2(o.a) + enc2(o.b);
@@ -152,7 +169,8 @@ function encodeSheet(orders, power) {
 }
 function orderText(o) {
   const L = M.locs, P = M.provs;
-  const unitAt = loc => { const u = S.units.find(x => x.l === loc) || S.dislodged.find(x => x.l === loc); return u ? (u.t === 1 ? "F" : "A") : "?"; };
+  if (o.k === "$") return o.text;
+  const unitAt = loc => { const u = S.units.find(x => x.l === loc) || S.dislodged.find(x => x.l === loc); return u ? "AFG"[u.t] : "?"; };
   const who = unitAt(o.u) + " " + (o.u >= 0 ? L[o.u].id : "?");
   switch (o.k) {
     case "m": return who + " - " + L[o.a].id + (o.via ? " via convoy" : "");
@@ -160,6 +178,9 @@ function orderText(o) {
     case "t": return who + " S " + P[o.a].id + " - " + L[o.b].id;
     case "c": return who + " C " + P[o.a].id + " - " + P[o.b].id;
     case "r": return o.a >= 0 ? who + " retreats to " + L[o.a].id : who + " disbands";
+    case "x": return who + " converts to " + ["an army", "a fleet", "a garrison"][o.b];
+    case "b": return who + " besieges the city";
+    case "l": return who + " lifts the siege";
     case "ba": return "Build A " + L[o.a].id;
     case "bf": return "Build F " + L[o.a].id;
     case "d": return "Disband the unit in " + P[L[o.a].prov].id;
@@ -281,7 +302,7 @@ async function startGamePage() {
     return;
   }
   M.provs.forEach(p => { p.pts = p.shape ? p.shape : ""; });
-  $("#app").innerHTML = `<div class="cols"><div><div id="actions"></div><div class="board"><svg id="svg" viewBox="0 0 ${M.width} ${M.height}"></svg></div><div id="below"></div></div><div id="side"></div></div>`;
+  $("#app").innerHTML = `<div class="cols"><div><div id="actions"></div><div id="money"></div><div class="board"><svg id="svg" viewBox="0 0 ${M.width} ${M.height}"></svg></div><div id="below"></div></div><div id="side"></div></div>`;
   await poll();
   setInterval(poll, 1500);
   setInterval(tickClock, 250);
@@ -308,7 +329,7 @@ async function poll() {
   if (S.my) loadSheet(); else myOrders = [];
   // what a device does by itself: seal whatever is on the sheet when time is up, open it when every seal is in
   if (S.my && !busy) {
-    if (S.stage === CLOSING && S.my.needs && !S.my.sealedOrders) { sealNow(); return; }
+    if (S.stage === CLOSING && S.my.needsSeal && !S.my.sealedOrders) { sealNow(); return; }
     if (S.stage === REVEAL && S.my.sealedOrders && !S.my.opened) { openNow(); return; }
   }
   render();
@@ -327,7 +348,7 @@ function render() {
   $("#hPhase").textContent = seasonName(S.stage === ANNOUNCE && S.announce ? S.announce.label : S.label);
   $("#hStage").textContent = STAGE_TEXT[S.stage];
   tickClock();
-  drawBoard(); drawSide(); drawActions(); drawBelow();
+  drawBoard(); drawSide(); drawActions(); drawMoney(); drawBelow();
 }
 
 // ---- board
@@ -353,16 +374,16 @@ function highlighted() {
   if (!canEdit() || !S.my.needs) return set;
   const o = S.my.options, L = M.locs;
   if (S.phase === 0) {
-    if (!ui.step) o.units.forEach(u => set.add(L[u.l].prov));
+    if (!ui.step) o.units.forEach(u => set.add(land(L[u.l].prov)));
     else if (ui.step === "move") ui.unit.moves.forEach(m => set.add(L[m.l].prov));
-    else if (ui.step === "sup") ui.unit.sup.forEach(s => set.add(s.p));
-    else if (ui.step === "sup2") ui.sup.to.forEach(t => set.add(t < 0 ? ui.sup.p : L[t].prov));
+    else if (ui.step === "sup") ui.unit.sup.forEach(s => set.add(land(s.p)));
+    else if (ui.step === "sup2") ui.sup.to.forEach(t => set.add(t < 0 ? land(ui.sup.p) : land(L[t].prov)));
     else if (ui.step === "con") ui.unit.con.forEach(c => set.add(c.p));
     else if (ui.step === "con2") ui.con.to.forEach(t => set.add(t));
   } else if (S.phase === 1) {
     if (!ui.step) o.dis.forEach(d => set.add(L[d.l].prov));
-    else if (ui.step === "ret") ui.unit.to.forEach(l => set.add(L[l].prov));
-  } else if (S.phase === 2) {
+    else if (ui.step === "ret") ui.unit.to.forEach(l => set.add(land(L[l].prov)));
+  } else if (S.phase === 2 && !isPurse()) {
     if (S.my.delta > 0) o.builds.forEach(b => set.add(L[b.l].prov));
     else o.disbands.forEach(l => set.add(L[l].prov));
   }
@@ -380,15 +401,27 @@ function drawBoard() {
   if (M.art) { const g = el("g", { "pointer-events": "none" }, svg); g.innerHTML = M.art; }
   if (!M.drawn && !M.art) M.links.forEach(([a, b]) => el("line", { x1: M.provs[a].x, y1: M.provs[a].y, x2: M.provs[b].x, y2: M.provs[b].y, stroke: "#b9b3a4", "stroke-width": 1.5 }, svg));
   const hl = highlighted();
+  const flags = st.flags || (S.purse && st === S ? S.purse.flags : null);
   M.provs.forEach((p, i) => {
+    if (p.type === 3) return; // a city entry: drawn as the marker of its province
     const s = provShape(p, "prov hit " + (p.type === 2 ? "sea" : "land"), svg, M.art ? { fill: "transparent", stroke: "none" } : {});
     s.addEventListener("click", () => tapProvince(i));
-    el("title", {}, s, p.name + (p.sc ? " (supply centre)" : ""));
+    el("title", {}, s, p.name + (isPurse() ? (p.city ? ` (${p.city === 2 ? "walled " : ""}city worth ${p.income}${p.port ? ", port" : ""})` : "") : (p.sc ? " (supply centre)" : "")));
     const owner = st.owners[i];
     if (owner >= 0 && p.type !== 2) provShape(p, "", svg, { fill: powerColor(owner), "fill-opacity": M.art ? .45 : .32, "pointer-events": "none", stroke: "none" });
   });
   if (M.labels) { const g = el("g", { "pointer-events": "none" }, svg); g.innerHTML = M.labels; }
   M.provs.forEach((p, i) => {
+    if (p.type === 3) return;
+    if (isPurse()) {
+      // the city marker shows who holds the city (which may differ from the province); a thick edge means walls
+      const holder = p.node >= 0 ? st.owners[p.node] : st.owners[i];
+      if (p.city) el("rect", { x: p.x - 5, y: p.y + 12, width: 10, height: 10, fill: holder >= 0 ? powerColor(holder) : "#fff", stroke: "#333", "stroke-width": p.city === 2 ? 2.4 : 1, "pointer-events": "none" }, svg);
+      const f = flags ? flags[i] : 0, cf = flags && p.node >= 0 ? flags[p.node] : 0;
+      const marks = (f & 1 ? " famine" : "") + ((f & 2) || (cf & 2) ? " REBELS" : "") + (f & 4 ? " siege" : "");
+      el("text", { x: p.x, y: p.y - 13, class: "plabel" }, svg, p.id + marks);
+      return;
+    }
     if (p.sc && M.art && p.scx >= 0) el("circle", { cx: p.scx, cy: p.scy, r: 7, fill: st.owners[i] >= 0 ? powerColor(st.owners[i]) : "#fff", stroke: "#222", "stroke-width": 2, "pointer-events": "none" }, svg);
     if (p.sc && !M.art) el("rect", { x: p.x - 4, y: p.y + 13, width: 8, height: 8, fill: st.owners[i] >= 0 ? powerColor(st.owners[i]) : "#fff", stroke: "#333", "stroke-width": 1.2, "pointer-events": "none", transform: `rotate(45 ${p.x} ${p.y + 17})` }, svg);
     if (!M.art) el("text", { x: p.x, y: p.y - 13, class: "plabel" }, svg, p.id);
@@ -397,7 +430,7 @@ function drawBoard() {
   let arrows = [];
   if (view) arrows = view.orders.map(o => Object.assign({ col: o.ok ? "g" : "r" }, o));
   else if (reading()) arrows = S.announce.lines.slice(0, S.announce.read).filter(x => x.from >= 0 && x.to >= 0).map(x => ({ k: 1, u: x.from, a: x.to, b: -1, col: "b" }));
-  else if (S.stage === ORDERS || S.stage === PAUSED || S.stage === CLOSING || S.stage === REVEAL) arrows = S.phase === 0 || S.phase === 1 ? myOrders.map(o => ({ k: { m: 1, s: 2, t: 3, c: 4, r: 1 }[o.k], u: o.u, a: o.a, b: o.b, col: "" })) : [];
+  else if (S.stage === ORDERS || S.stage === PAUSED || S.stage === CLOSING || S.stage === REVEAL) arrows = S.phase === 0 || S.phase === 1 ? myOrders.filter(o => o.k !== "$").map(o => ({ k: { m: 1, s: 2, t: 3, c: 4, r: 1, x: 1 }[o.k], u: o.u, a: o.a, b: o.b, col: "" })) : [];
   arrows.forEach(o => {
     if (o.u < 0 || o.a < 0) return;
     const from = M.provs[M.locs[o.u].prov];
@@ -419,13 +452,14 @@ function drawBoard() {
     const a = { fill: powerColor(u.p), stroke: dashed ? "#111" : (u.p === mine ? "#ffd200" : "#fff"), "stroke-width": u.p === mine ? 3 : 2, "pointer-events": "none" };
     if (dashed) a["stroke-dasharray"] = "3 2";
     if (u.t === 1) el("path", Object.assign(a, { d: `M${x - 12 * k},${y + 8 * k} L${x + 12 * k},${y + 8 * k} L${x},${y - 12 * k} z` }), svg);
+    else if (u.t === 2) el("rect", Object.assign(a, { x: x - 9 * k, y: y - 9 * k, width: 18 * k, height: 18 * k }), svg);
     else el("circle", Object.assign(a, { cx: x, cy: y, r: 10 * k }), svg);
-    el("text", { x, y: y + 4 * k, class: "ulabel", "font-size": 11 * k }, svg, u.t === 1 ? "F" : "A");
+    el("text", { x, y: y + 4 * k, class: "ulabel", "font-size": 11 * k }, svg, "AFG"[u.t] + (u.c ? "*" : ""));
   };
   st.units.forEach(u => drawUnit(u, 0, false));
   st.dislodged.forEach(u => drawUnit(u, 16, true));
   hl.forEach(i => provShape(M.provs[i], "hl", svg));
-  if (ui.unit && !view) provShape(M.provs[M.locs[ui.unit.l].prov], "sel", svg);
+  if (ui.unit && !view) provShape(M.provs[land(M.locs[ui.unit.l].prov)], "sel", svg);
 }
 
 // ---- tapping (edits the private sheet in this browser only)
@@ -434,29 +468,39 @@ function tapProvince(i) {
   if (!highlighted().has(i)) { if (ui.step) { ui = { step: null }; render(); } return; }
   const o = S.my.options, L = M.locs;
   if (S.phase === 0) {
-    if (!ui.step) { ui = { step: "unit", unit: o.units.find(u => L[u.l].prov === i) }; }
+    if (!ui.step) {
+      // a province can hold two of my units: one outside and a garrison in the city
+      const c = o.units.filter(u => land(L[u.l].prov) === i);
+      if (c.length === 1) ui = { step: "unit", unit: c[0] };
+      else ui = { step: "pick", pick: c.map(u => ({ label: unitWord(u.t) + " in " + L[u.l].name, act: () => { ui = { step: "unit", unit: u }; render(); } })) };
+    }
     else if (ui.step === "move") {
       const c = ui.unit.moves.filter(m => L[m.l].prov === i);
       if (c.length === 1) return setOrder({ k: "m", u: ui.unit.l, a: c[0].l, b: -1, via: c[0].via });
       ui.step = "pick"; ui.pick = c.map(m => ({ label: L[m.l].name + (m.via ? " (by convoy)" : c.some(x => x.via) ? " (over land)" : ""), order: { k: "m", u: ui.unit.l, a: m.l, b: -1, via: m.via } }));
     }
-    else if (ui.step === "sup") { ui.sup = ui.unit.sup.find(s => s.p === i); ui.step = "sup2"; }
+    else if (ui.step === "sup") {
+      const c = ui.unit.sup.filter(s => land(s.p) === i), unit = ui.unit;
+      if (c.length === 1) { ui.sup = c[0]; ui.step = "sup2"; }
+      else { ui.step = "pick"; ui.pick = c.map(s => ({ label: "the unit in " + L[s.p].name, act: () => { ui = { step: "sup2", unit, sup: s }; render(); } })); }
+    }
     else if (ui.step === "sup2") {
-      if (i === ui.sup.p && ui.sup.to.includes(-1)) return setOrder({ k: "s", u: ui.unit.l, a: ui.sup.p, b: -1 });
-      const c = ui.sup.to.filter(t => t >= 0 && L[t].prov === i);
-      if (c.length === 1) return setOrder({ k: "t", u: ui.unit.l, a: ui.sup.p, b: c[0] });
-      ui.step = "pick"; ui.pick = c.map(t => ({ label: L[t].name, order: { k: "t", u: ui.unit.l, a: ui.sup.p, b: t } }));
+      const c = [];
+      if (land(ui.sup.p) === i && ui.sup.to.includes(-1)) c.push({ label: "it stays where it is", order: { k: "s", u: ui.unit.l, a: ui.sup.p, b: -1 } });
+      ui.sup.to.filter(t => t >= 0 && land(L[t].prov) === i).forEach(t => c.push({ label: "it goes to " + L[t].name, order: { k: "t", u: ui.unit.l, a: ui.sup.p, b: t } }));
+      if (c.length === 1) return setOrder(c[0].order);
+      ui.step = "pick"; ui.pick = c;
     }
     else if (ui.step === "con") { ui.con = ui.unit.con.find(c => c.p === i); ui.step = "con2"; }
     else if (ui.step === "con2") return setOrder({ k: "c", u: ui.unit.l, a: ui.con.p, b: i });
   } else if (S.phase === 1) {
     if (!ui.step) ui = { step: "ret", unit: o.dis.find(d => L[d.l].prov === i) };
     else if (ui.step === "ret") {
-      const c = ui.unit.to.filter(l => L[l].prov === i);
+      const c = ui.unit.to.filter(l => land(L[l].prov) === i);
       if (c.length === 1) return setOrder({ k: "r", u: ui.unit.l, a: c[0], b: -1 });
       ui.step = "pick"; ui.pick = c.map(l => ({ label: L[l].name, order: { k: "r", u: ui.unit.l, a: l, b: -1 } }));
     }
-  } else if (S.phase === 2) {
+  } else if (S.phase === 2 && !isPurse()) {
     if (S.my.delta > 0) {
       const c = o.builds.filter(b => L[b.l].prov === i);
       ui = { step: "pick", pick: c.map(b => ({ label: (b.t === 1 ? "Fleet" : "Army") + " in " + L[b.l].name, order: { k: b.t === 1 ? "bf" : "ba", u: -1, a: b.l, b: -1 } })) };
@@ -473,12 +517,12 @@ function tapProvince(i) {
 
 function setOrder(order) {
   const L = M.locs;
-  if (S.phase === 2) {
+  if (S.phase === 2 && !isPurse()) {
     myOrders = myOrders.filter(x => L[x.a].prov !== L[order.a].prov);
     myOrders.push(order);
     while (myOrders.length > S.my.delta) myOrders.shift();
   } else {
-    myOrders = myOrders.filter(x => x.u !== order.u);
+    myOrders = myOrders.filter(x => x.k === "$" || x.u !== order.u);
     if (order.k !== "h" && !(order.k === "r" && order.a < 0)) myOrders.push(order);
   }
   ui = { step: null };
@@ -489,6 +533,8 @@ function setOrder(order) {
 function drawAnnouncement() {
   const A = S.announce;
   let h = `<div class="ann"><h3>${A.at === 0 ? "The round is over. Back to the map..." : A.at >= 3 ? "Results of " + esc(seasonName(A.label)) : "The orders for " + esc(seasonName(A.label))}</h3>`;
+  const news = A.lines.map((x, k) => Object.assign({ k }, x)).filter(x => x.p < 0 && x.k < A.read);
+  if (news.length) h += `<div style="margin:6px 0"><b>News</b><div>` + news.map(x => `<div class="${x.k === A.read - 1 && A.at === 2 ? "cur" : "done"}" data-line="${x.k}">${esc(x.text)}</div>`).join("") + `</div></div>`;
   M.powers.forEach((pw, i) => {
     const lines = A.lines.map((x, k) => Object.assign({ k }, x)).filter(x => x.p === i && x.k < A.read);
     const naming = A.atPower === i;
@@ -520,16 +566,18 @@ function drawActions() {
   let h = "";
   const L = M.locs;
   if (ui.step === "unit") {
-    const u = ui.unit, name = (u.t === 1 ? "Fleet" : "Army") + " in " + L[u.l].name;
-    h = `<b>${esc(name)}:</b> <button data-a="hold">Hold</button> <button data-a="move" ${u.moves.length ? "" : "disabled"}>Move</button> <button data-a="sup" ${u.sup.length ? "" : "disabled"}>Support</button> <button data-a="con" ${u.con.length ? "" : "disabled"}>Convoy</button> <button data-a="x">Cancel</button>`;
+    const u = ui.unit, name = unitWord(u.t) + " in " + L[u.l].name;
+    h = `<b>${esc(name)}:</b> <button data-a="hold">Hold</button> <button data-a="move" ${u.moves.length ? "" : "disabled"}>Move</button> <button data-a="sup" ${u.sup.length ? "" : "disabled"}>Support</button> <button data-a="con" ${u.con.length ? "" : "disabled"}>Convoy</button>${u.conv && u.conv.length ? ` <button data-a="conv">Convert</button>` : ""}${u.siege ? ` <button data-a="besiege">Besiege</button>` : ""}${u.sieging ? ` <button data-a="lift">Lift siege</button>` : ""} <button data-a="x">Cancel</button>`;
   } else if (ui.step === "pick") {
     h = `Which? ` + ui.pick.map((p, i) => `<button data-p="${i}">${esc(p.label)}</button>`).join(" ") + ` <button data-a="x">Cancel</button>`;
   } else if (ui.step === "ret") {
-    h = `<b>${esc((ui.unit.t === 1 ? "Fleet" : "Army") + " in " + L[ui.unit.l].name)}</b> was dislodged. ${ui.unit.to.length ? "Tap where it retreats to, or" : "It has nowhere to go:"} <button data-a="disband">Disband it</button> <button data-a="x">Cancel</button>`;
+    h = `<b>${esc(unitWord(ui.unit.t) + " in " + L[ui.unit.l].name)}</b> was dislodged. ${ui.unit.to.length ? "Tap where it retreats to, or" : "It has nowhere to go:"} <button data-a="disband">Disband it</button> <button data-a="x">Cancel</button>`;
   } else if (ui.step) {
     h = ({ move: "Tap the destination.", sup: "Tap the unit to support.", sup2: "Tap where that unit is going (tap the unit itself to support it staying put).", con: "Tap the army to carry.", con2: "Tap where the army is going." }[ui.step]) + ` <button data-a="x">Cancel</button>`;
   } else {
-    h = S.phase === 0 ? "Tap one of your units to give it an order. Units without an order hold. When the clock runs out, whatever is on your sheet is used."
+    h = S.phase === 2 && isPurse() ? "Winter: every unit you keep costs 3 ducats. Use the treasury panel below to dismiss units or buy new ones; an empty sheet keeps everything you can pay for."
+      : S.phase === 0 && isPurse() ? "Tap one of your units to give it an order, and use the treasury panel below for money and expenses. Expenses happen first, then the units move."
+      : S.phase === 0 ? "Tap one of your units to give it an order. Units without an order hold. When the clock runs out, whatever is on your sheet is used."
       : S.phase === 1 ? "Tap a dislodged unit (dashed outline) to retreat it. Units without an order are disbanded."
       : S.my.delta > 0 ? `You may build ${S.my.delta} unit${S.my.delta > 1 ? "s" : ""}. Tap a highlighted home centre.`
       : `You must disband ${-S.my.delta} unit${S.my.delta < -1 ? "s" : ""}. Tap the unit${S.my.delta < -1 ? "s" : ""} to remove.`;
@@ -537,12 +585,107 @@ function drawActions() {
   box.innerHTML = `<div class="actions">${h}${flash ? `<div class="err">${esc(flash)}</div>` : ""}</div>`;
   box.querySelectorAll("button").forEach(b => b.onclick = () => {
     const a = b.dataset.a;
-    if (b.dataset.p !== undefined) return setOrder(ui.pick[+b.dataset.p].order);
+    if (b.dataset.p !== undefined) { const pick = ui.pick[+b.dataset.p]; return pick.act ? pick.act() : setOrder(pick.order); }
     if (a === "x") { ui = { step: null }; render(); }
     else if (a === "hold") setOrder({ k: "h", u: ui.unit.l });
+    else if (a === "besiege") setOrder({ k: "b", u: ui.unit.l, a: -1, b: -1 });
+    else if (a === "lift") setOrder({ k: "l", u: ui.unit.l, a: -1, b: -1 });
+    else if (a === "conv") {
+      const u = ui.unit;
+      ui = { step: "pick", unit: u, pick: u.conv.map(c => ({ label: "becomes " + ["an army", "a fleet", "a garrison"][c.t] + " in " + M.locs[c.l].name, order: { k: "x", u: u.l, a: c.l, b: c.t } })) };
+      render();
+    }
     else if (a === "disband") setOrder({ k: "r", u: ui.unit.l, a: -1 });
     else { ui.step = a; render(); }
   });
+}
+
+// ---- the treasury panel (Renaissance ruleset): money orders and expenses go on the same private sheet as the unit orders
+let moneySig = "";
+const place2 = l => enc2(l);
+function addMoney(item, text) {
+  if (!canEdit()) return;
+  if (item[0] === "E" && myOrders.filter(o => o.k === "$" && o.item[0] === "E").length >= 4) { flash = "At most four expenses per campaign."; return render(); }
+  // one repayment, one loan of each length and one gift per power at a time: a new one replaces the old
+  const same = o => o.k === "$" && (item[0] === "P" ? o.item[0] === "P" : item[0] === "B" || item[0] === "G" || item[0] === "T" ? o.item.slice(0, 2) === item.slice(0, 2) : item[0] === "D" || item[0] === "N" ? o.item.slice(-2) === item.slice(-2) && o.item[0] === item[0] : false);
+  myOrders = myOrders.filter(o => !same(o));
+  myOrders.push({ k: "$", item, text });
+  flash = ""; saveSheet(); moneySig = ""; render();
+}
+function drawMoney() {
+  const box = $("#money");
+  const show = isPurse() && S.my && S.my.needs && !view && (S.stage === ORDERS || S.stage === PAUSED) && (S.phase === 0 || S.phase === 2);
+  if (!show) { box.innerHTML = ""; moneySig = ""; return; }
+  // redraw only when something changed, so that half-filled forms survive the polling
+  const sig = S.serial + "|" + S.my.submitted + "|" + myOrders.length + "|" + S.phase;
+  if (sig === moneySig) return;
+  moneySig = sig;
+  const o = S.my.options, L = M.locs, P = M.provs, edit = canEdit();
+  const dis = edit ? "" : "disabled";
+  let h = `<div class="card"><h2>Treasury: ${S.phase === 0 ? o.spend.treasury : o.treasury} ducats</h2>`;
+  if (S.phase === 2) {
+    const upkeep = o.mine.reduce((a, u) => a + u.cost, 0);
+    h += `<p class="small">Keeping all ${o.mine.length} units costs ${upkeep} ducats. A new unit costs ${o.unitCost}.</p>
+      <div class="row"><select id="mDis">${o.mine.map(u => `<option value="${u.l}">${esc(unitWord(u.t) + " in " + L[u.l].name)}</option>`).join("")}</select><button id="mDisGo" ${dis} ${o.mine.length ? "" : "disabled"}>Dismiss</button></div>
+      <div class="row" style="margin-top:6px"><select id="mNew">${o.builds.map(b => `<option value="${b.t}:${b.l}">${esc(unitWord(b.t) + " in " + L[b.l].name)}</option>`).join("")}</select><button id="mNewGo" ${dis} ${o.builds.length ? "" : "disabled"}>Build</button></div>`;
+  } else {
+    const sp = o.spend;
+    if (sp.loans.length) h += `<p class="small">Owed to the bank: ` + sp.loans.map(l => `${l.principal}+${l.interest} due ${l.dueIn <= 0 ? "now" : "in " + l.dueIn + " campaign" + (l.dueIn > 1 ? "s" : "")}`).join("; ") + `</p>`;
+    const kinds = [];
+    if (sp.bribes.some(b => b.d > 0)) kinds.push(["d", "Bribe a unit to disband"]);
+    if (sp.bribes.some(b => b.b > 0)) kinds.push(["b", "Buy a unit"]);
+    if (sp.bribes.some(b => b.a > 0)) kinds.push(["g", "Turn a garrison autonomous"]);
+    if (sp.bribes.some(b => b.counter)) kinds.push(["c", "Counter-bribe (protect a unit)"]);
+    if (sp.rebel.length) kinds.push(["r", "Raise a rebellion"]);
+    if (sp.pacify.length) kinds.push(["p", "Pacify a rebellion"]);
+    if (sp.relief.length) kinds.push(["f", "Famine relief"]);
+    if (sp.kill.length) kinds.push(["a", "Assassinate a ruler"]);
+    h += `<div class="row"><select id="xKind">${kinds.map(k => `<option value="${k[0]}">${k[1]}</option>`).join("")}</select><select id="xTarget"></select><input id="xAmt" type="number" min="0" step="3" style="width:64px"><button id="xAdd" ${dis} ${kinds.length ? "" : "disabled"}>Add expense</button></div>
+      <div class="row" style="margin-top:6px"><select id="bKind">${sp.canBorrow ? `<option value="B1">Borrow for 1 year (20%)</option><option value="B2">Borrow for 2 years (50%)</option>` : ""}${sp.debt ? `<option value="P">Repay the bank</option>` : ""}<option value="G">Give ducats to</option><option value="T">Hand over my token against</option></select>
+      <select id="bWho">${sp.others.map(v => `<option value="${v}">${esc(M.powers[v].name)}</option>`).join("")}</select><select id="bTo">${sp.others.map(v => `<option value="${v}">to ${esc(M.powers[v].name)}</option>`).join("")}</select><input id="bAmt" type="number" min="1" style="width:64px" value="3"><button id="bAdd" ${dis}>Add</button></div>
+      <p class="small muted">Up to four expenses, carried out in order before any unit moves. A failed expense costs the same. Tokens against: ${sp.others.filter(v => sp.tokens[v] > 0).map(v => esc(M.powers[v].name)).join(", ") || "none"}.</p>`;
+  }
+  box.innerHTML = h + `</div>`;
+  if (S.phase === 2) {
+    if ($("#mDisGo")) $("#mDisGo").onclick = () => { const l = +$("#mDis").value, u = o.mine.find(x => x.l === l); addMoney("D" + place2(l), "Dismiss the " + unitWord(u.t).toLowerCase() + " in " + L[l].name); };
+    if ($("#mNewGo")) $("#mNewGo").onclick = () => { const [t, l] = $("#mNew").value.split(":").map(Number); addMoney("N" + t + "0" + place2(l), "Build " + ["an army", "a fleet", "a garrison"][t] + " in " + L[l].name); };
+    return;
+  }
+  const sp = o.spend;
+  const unitLabel = b => unitWord(b.t) + " in " + L[b.l].name + " (" + M.powers[b.p].name + ")";
+  const targets = kind => kind === "d" ? sp.bribes.filter(b => b.d > 0).map(b => [b.l, unitLabel(b), b.d])
+    : kind === "b" ? sp.bribes.filter(b => b.b > 0).map(b => [b.l, unitLabel(b), b.b])
+    : kind === "g" ? sp.bribes.filter(b => b.a > 0).map(b => [b.l, unitLabel(b), b.a])
+    : kind === "c" ? sp.bribes.filter(b => b.counter).map(b => [b.l, unitLabel(b), 3])
+    : kind === "r" ? sp.rebel.map(r => [r.p, P[r.p].name, r.cost])
+    : kind === "p" ? sp.pacify.map(q => [q, P[q].name, 12])
+    : kind === "f" ? sp.relief.map(q => [q, P[q].name, 3])
+    : sp.kill.map(v => [v, M.powers[v].name, 12]);
+  const fill = () => {
+    const t = targets($("#xKind").value);
+    $("#xTarget").innerHTML = t.map((x, i) => `<option value="${i}">${esc(x[1])} — at least ${x[2]}</option>`).join("");
+    $("#xAmt").value = t.length ? t[0][2] : 0; $("#xAmt").step = $("#xKind").value === "a" ? 12 : 3;
+  };
+  if ($("#xKind") && $("#xKind").options.length) {
+    fill();
+    $("#xKind").onchange = fill;
+    $("#xTarget").onchange = () => { const t = targets($("#xKind").value)[+$("#xTarget").value]; if (t) $("#xAmt").value = t[2]; };
+    $("#xAdd").onclick = () => {
+      const kind = $("#xKind").value, t = targets(kind)[+$("#xTarget").value], n = Math.max(0, Math.floor(+$("#xAmt").value));
+      if (!t || !n) return;
+      const words = { d: "bribe to disband the ", b: "buy the ", g: "turn autonomous the ", c: "counter-bribe for the ", r: "raise a rebellion in ", p: "pacify ", f: "famine relief for ", a: "assassinate the ruler of " }[kind];
+      addMoney("E" + kind + (kind === "a" ? DIG[t[0]] + "0" : place2(t[0])) + n, n + " ducats: " + words + t[1]);
+    };
+  }
+  const bk = () => { const k = $("#bKind").value; $("#bWho").style.display = k === "G" || k === "T" ? "" : "none"; $("#bTo").style.display = k === "T" ? "" : "none"; $("#bAmt").style.display = k === "T" ? "none" : ""; };
+  bk(); $("#bKind").onchange = bk;
+  $("#bAdd").onclick = () => {
+    const k = $("#bKind").value, n = Math.max(0, Math.floor(+$("#bAmt").value)), who = +$("#bWho").value, to = +$("#bTo").value;
+    if (k === "B1" || k === "B2") { if (n) addMoney(k + n, "Borrow " + n + " ducats for " + (k === "B1" ? "one year" : "two years")); }
+    else if (k === "P") { if (n) addMoney("P" + n, "Repay " + n + " ducats to the bank"); }
+    else if (k === "G") { if (n) addMoney("G" + DIG[who] + n, "Give " + n + " ducats to " + M.powers[who].name); }
+    else if (k === "T" && who !== to) addMoney("T" + DIG[who] + DIG[to], "Hand my token against " + M.powers[who].name + " to " + M.powers[to].name);
+  };
 }
 
 // ---- side panel
@@ -567,6 +710,7 @@ function drawSide() {
   h += `<div class="card"><h2>Powers</h2>`;
   S.seats.forEach(s => {
     const pw = M.powers[s.power];
+    if (!s.playable) return; // garrisons that answer to nobody have no seat
     let tags = "";
     if (S.stage === LOBBY) tags = s.name ? "" : (S.me && S.me.power < 0 ? `<button data-seat="${s.power}">Take</button>` : "");
     else if (s.gone) tags = `<span class="tag">out</span>`;
@@ -577,9 +721,9 @@ function drawSide() {
     else if (S.stage !== LOBBY && s.name && !s.present && S.me && S.me.power < 0 && !s.gone) tags += ` <button data-seat="${s.power}">Take over</button>`;
     if (s.vote) tags += ` <span class="tag">votes draw</span>`;
     if (S.isHost && s.name && S.me && s.name !== S.me.name) tags += ` <button data-free="${s.power}" title="Free this seat">×</button>`;
-    h += `<div class="seat"><span class="dot" style="background:${esc(pw.color)}"></span><div><b>${esc(pw.name)}</b>${S.winner === s.power ? " 🏆" : ""}<div class="small muted">${s.name ? esc(s.name) + (s.present || S.stage === LOBBY ? "" : " (away: units hold)") : "nobody"}${S.stage ? ` · ${s.centres} centres, ${s.units} units` : ""}</div></div><div>${tags}</div></div>`;
+    h += `<div class="seat"><span class="dot" style="background:${esc(pw.color)}"></span><div><b>${esc(pw.name)}</b>${S.winner === s.power ? " 🏆" : ""}<div class="small muted">${s.name ? esc(s.name) + (s.present || S.stage === LOBBY ? "" : " (away: units hold)") : "nobody"}${S.stage ? (S.purse ? ` · ${S.purse.treasury[s.power]} ducats, ${S.purse.cities[s.power]} cities, ${S.purse.homes[s.power]} home, ${s.units} units` : ` · ${s.centres} centres, ${s.units} units`) : ""}${s.unopened ? ` · <span title="sealed sheets that were never opened">unopened: ${s.unopened}</span>` : ""}</div></div><div>${tags}</div></div>`;
   });
-  h += `<p class="small muted">Victory: ${M.victory} centres. Host: ${esc(S.host || "nobody")}.</p>`;
+  h += `<p class="small muted">${S.purse ? `Rules: ${esc(S.rules)}. Victory: ${M.victory} cities and ${S.purse.victoryHomes} home countries.` : `Victory: ${M.victory} centres.`} Host: ${esc(S.host || "nobody")}.</p>`;
   if (S.stage === LOBBY && S.me && S.me.power >= 0) h += `<button id="sLeave">Leave my seat</button>`;
   h += `</div>`;
   if (S.stage === FINISHED) h += `<div class="card"><h2>Game over</h2>${S.drawn ? "The players agreed a draw." : S.winner >= 0 ? `<b>${esc(M.powers[S.winner].name)}</b> wins.` : ""}</div>`;

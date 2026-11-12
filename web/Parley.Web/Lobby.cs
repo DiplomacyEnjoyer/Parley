@@ -28,6 +28,8 @@ public sealed class MapInfo
 
 public sealed class WebGame
 {
+    /// <summary>A second copy of the engine, used only to replay past phases for the history view.</summary>
+    public Game Replay;
     public string Id = "", Title = "";
     public DateTime Created = DateTime.UtcNow;
     public Game G;
