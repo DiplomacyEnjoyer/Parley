@@ -1,31 +1,122 @@
 # Status
 
-*Third session ("hard design" session) in progress. This block is kept current after
-every step so that anyone, human or model, can pick up exactly here.*
+*Last updated at the end of the third session (the "hard design" session). All five
+tasks you set were worked through in order; what is finished, what is partly finished
+and what is left is listed below. Everything is committed and on `main`.*
 
-## Third session: where things stand right now
+## Read this first
 
-| Step | State |
+1. **The engine now has pluggable rulesets.** The standard game is one module; nothing
+   about standard play changed (old and new engine give byte-for-byte identical
+   answers on 20,000 situations and 400 whole games; DATC 165/165; old saves load).
+2. **The tamper-proof orders were attacked on paper and in tests, and hardened.** Seven
+   real weaknesses were found and fixed; one cannot be fixed without a referee (a
+   player can refuse to open their sheet after seeing the others': their units hold,
+   it is announced and counted). Plain-language write-up:
+   `docs/secret-orders-and-dice.md`.
+3. **There are fair dice.** Built from every player's sealed secret; the host cannot
+   steer or predict them; anyone can re-check every roll from the saved game.
+4. **The Renaissance game is playable**, under the name **"Purse and Dagger"**
+   (the original's name is a trademark; tell me if you want another). Money, loans,
+   bribes, garrisons, sieges, rebellions, assassins, famine, plague. Run
+   `./scripts/fetch-reference-maps.sh` and pick the map "Italy 1454" in the web
+   client. It is drawn as dots and lines: there is no board picture.
+5. **Please read `docs/machiavelli-rulings.md` if you know the game.** There is no
+   second implementation to check against, so the rulings are my reading of the
+   e-mail judges' rules. Five of them differ on purpose (dice timing, automatic
+   upkeep, public expenses and treasuries, rebellions take a full campaign). They are
+   marked **(differs)**.
+6. **Fog of War:** real hidden information is not possible inside VRChat without a
+   referee machine. Recommendation and options in `docs/fog-of-war.md`. The engine
+   rule for "who sees what" is built; nothing else is.
+7. **VRChat sync design** is written (`docs/vrchat-sync-design.md`) but rests on my
+   memory of VRChat's documentation, which was unreachable. Its last section lists
+   what to verify first in Unity.
+8. Still open from before: delete the old `initial-engine` branch on GitHub by hand;
+   how pausing should work (DECISIONS §21).
+
+## The five tasks
+
+| Task | State | Where |
+|---|---|---|
+| 1. Pluggable rules | **Done, tested** | `Ruleset.cs`, `StandardRules.cs`, shared `Adjudicator.cs`; calendar and cities come from the map file; DECISIONS §23; `RulesetTests` |
+| 2. Harden secret orders; fair dice | **Done, tested** | `OrderSeal.cs`, `Dice.cs`, `GameFlow` (run names, reveal floor, `LiveState`, `VerifyLast`); `docs/secret-orders-and-dice.md`; DECISIONS §24, §25; `AdversaryTests` |
+| 3. Renaissance ruleset | **Done, tested**, with listed simplifications | `PurseRules.cs`; importer `parley import-njudge-mach`; `docs/machiavelli-rulings.md`; DECISIONS §26; `PurseTests` (38 cases), `parley purse-sim`; web client and browser playtest |
+| 4. Fog of War | **Design done; engine rule built; no fog game mode yet** | `docs/fog-of-war.md`; `Visibility.cs`; DECISIONS §27 |
+| 5. VRChat sync and recovery | **Design done** (unverified against VRChat's docs) | `docs/vrchat-sync-design.md`; DECISIONS §28 |
+
+## How it was tested
+
+| What | Result |
 |---|---|
-| 1. Rulesets as modules | **Done, tested, on main.** `Ruleset.cs` (the door), `StandardRules.cs` (the standard game), `Adjudicator.cs` (shared referee). DECISIONS §23. DATC 165/165; old and new engine give byte-identical answers on 20,000 situations and 400 games; cross-checks and browser playtest pass. |
-| 2. Tamper-proof orders reviewed; fair dice | **Done, tested, on main.** `docs/secret-orders-and-dice.md`, DECISIONS §24, §25, `AdversaryTests`. |
-| 3. Renaissance ruleset ("Purse and Dagger") | **In progress.** Done: the module `PurseRules.cs`, importer for the nJudge board (`parley import-njudge-mach`), random-play harness (`parley purse-sim`, thousands of phases, no problems), a small original test board (`tests/purse/valleys.pmap`), test helper `tests/Parley.Tests/PurseBoard.cs`. **Left:** hand-written rule cases (`PurseTests.cs`), `docs/machiavelli-rulings.md`, DECISIONS §26, fetch script and THIRD_PARTY entry for the nJudge files, web client (treasury, expenses, garrison orders) and its browser playtest. |
-| 4. Fog of war | Not started (`docs/fog-of-war.md`, engine-side visibility filter if time). |
-| 5. VRChat sync design | Not started (`docs/vrchat-sync-design.md`). |
+| `dotnet test` | 354 tests pass |
+| DATC v3.0 | 165 of 165 |
+| Old engine against new, same inputs | Identical output on 20,000 situations and 400 whole games |
+| Python `diplomacy` engine | 19,986 of 20,000 situations identical; the 14 others are rule-edition differences (DECISIONS §7); 400 games, no unexplained difference |
+| godip | 400 games, no unexplained difference |
+| Sealed orders under attack | `AdversaryTests`: one test per attack (replay, host cutting the reveal short, seat hand-over, weak salts, forged hand-over, lying host, withholding) |
+| SHA-256 | NIST vectors including the million-letter message; every block-boundary length against the standard library |
+| Renaissance ruleset | 38 hand-written cases; random play: tens of thousands of phases on two boards with no impossible position, every position surviving its game code, and exact replay from the archive including dice |
+| Browser playtest (`node web/e2e/playtest.js standard ring5 valleys`) | 123 checks, none failed: the earlier whole-game tests, plus a year of the Renaissance ruleset through the page (loan, bribe, assassination attempt on shared dice, conversions by tapping, a server restart in mid-campaign) |
 
-Branch note: work is committed on `claude/youthful-pasteur-9satoz` and fast-forwarded to
-`main` after each verified step (no other session was active on main).
+Not re-run this session: the browser playtest on Modern and Ancient Mediterranean
+(they use the same code paths as the classic board).
 
-Reference material used for step 3 (not committed): the nJudge 0.8.10 source archive
-from SourceForge (`data/rules.machiavelli`, `data/map.machiavelli`, `data/seed.9`).
-diplom.org and VRChat's documentation sites are blocked from this machine. The
-Condottieri project is AGPL-3.0: ideas only, no code.
+## Left to do (for any model or person)
+
+Renaissance ruleset:
+
+- [ ] A human who knows the game reads `docs/machiavelli-rulings.md`.
+- [ ] Simplified on purpose, listed there: straits (no permission order, convoys not
+      blocked), no fortresses, no per-power limits on special units, one unclear
+      strength-2 siege rule left out.
+- [ ] Web client: no way yet to choose the options (famine, plague, loans, assassins,
+      special units, adjacency) when creating a game; the board's defaults are used.
+      `PurseRules.startOptions` is the switch. Special units cannot be built from the page.
+- [ ] Web client: the Italy board has no picture; a hand-made layout (`xy` lines) would
+      make it far more readable than the automatic one.
+- [ ] Bots for it are random only (test equipment).
+
+Fog of War:
+
+- [ ] Web judge fog mode: filter `Views.State` and `Views.HistoryEntry` through
+      `Visibility`, add a game setting, withhold code and archive from players, publish
+      everything at the end for the audit. About a day.
+
+Sealed orders:
+
+- [ ] "Escrow shares" (so that the other players can open the sheet of someone who
+      dropped) if VRChat's owner-targeted events prove private. See the write-up.
+
+Carried over from before: 1900 variant; godip variants; variants that start with a
+build phase; a human playtest of the web client; the Unity phase itself.
+
+## Notes for whoever continues
+
+- **Adding a ruleset:** write a module shaped like `StandardRules.cs` or `PurseRules.cs`,
+  add a `KIND_` and one line per method in `Ruleset.cs`, wire it in
+  `tools/Parley.Tools/Game.cs`. Extra state goes into `BoardState.ext`, `unitFlag`,
+  `provFlag` and is saved in game codes automatically when the map has a `rules` line.
+- **Dice:** ask `Dice.Roll(sides, label)` with a label unique within the phase. Only use
+  dice in a phase where `UsesDice` is true, and only in phases where every player has
+  something to lose (see DECISIONS §25).
+- **A walled city is an extra province entry** (type `CITY`, index at or above
+  `map.landCount`). Loops meant for real provinces should stop at `landCount`.
+- `GameFlow.Init` now takes the ruleset and the dice; `tools/Parley.Tools/Game.cs` shows
+  the wiring. The archive keeps each dice phase's seed after the sheets
+  (`GameHistory.OrdersAt`, `SeedAt`).
+- Reference material for the Renaissance rules is fetched into `third_party/njudge/`
+  (rules text included, for reading; not committed).
+- Web server: `PARLEY_MAPS` adds map folders (the playtest uses it for `tests/purse`);
+  `PLAYTEST_SERVER_LOG=<file>` keeps the server's output during a playtest.
+- This session ran on a branch (`claude/youthful-pasteur-9satoz`) that was
+  fast-forwarded to `main` after each verified step; no other session was active.
 
 ---
 
-*Below: status as of the end of the second session.*
+## Status at the end of the second session (kept for reference)
 
-## Read this first
+### Read this first (second session)
 
 1. **The classic board is now the default map.** Run `./scripts/fetch-reference-maps.sh`
    once; it downloads the map and its picture from the open-source Python `diplomacy`
@@ -44,7 +135,7 @@ Condottieri project is AGPL-3.0: ideas only, no code.
 6. **Variants:** research and shortlist in `docs/variants-research.md`. Ten community
    variants with pictures now install from jDip. 1900 could not be fetched from here.
 
-## Done and tested
+### Done and tested (second session)
 
 | Piece | State | How it is tested |
 |---|---|---|
@@ -63,7 +154,7 @@ Condottieri project is AGPL-3.0: ideas only, no code.
 | Web client on the new flow | Working | `web/e2e/playtest.js`: whole multi-player games through the page (details below) |
 | UdonSharp-subset guard | Done | Covers the new engine files too |
 
-Test count: 280 (`dotnet test`, after running the fetch script).
+Test count then: 280.
 
 ### Automated playtest (`web/e2e/playtest.js`)
 
@@ -80,14 +171,14 @@ Results: **classic board, Modern, Ancient Mediterranean and Ring of 5 pass every
 the 10-power maps was a race in the test itself (it sometimes started waiting after the
 phase had already ended), now fixed. Timeouts print the page's state if one ever recurs.
 
-## Decisions you made this session (recorded in DECISIONS.md)
+### Decisions you made in the second session (recorded in DECISIONS.md)
 
 Classic map default, fetched at setup (§2); resume and roll-back host only, every client
 keeps the save (§8); tamper-proof orders (§10, §18); newest DATC convoy ruling (§7);
 name stays "Parley" (§1); contributor terms not needed yet (§14); Ring maps are test
 maps only (§12).
 
-## Next steps, in your priority order
+### Next steps as they stood then
 
 - [x] Step 0: build and tests pass. Branch deletion blocked (see above).
 - [x] Classic map data and art, default in the web client, README steps, THIRD_PARTY.md.
@@ -113,7 +204,7 @@ Unity/VRChat phase (unchanged; see docs/vr-world-design.md for the owner's desig
       confirm that hand-written SHA-256 runs (DECISIONS §18); measure speed on Quest.
 - [ ] Board, order sheet with hand tracking, clock, announcer, network sync of seals, PlayerData saves.
 
-## Notes for whoever continues this (human or another model)
+### Notes for whoever continues this (human or another model)
 
 - The engine must stay inside the subset listed in DECISIONS §3. `UdonSubsetTests` will
   tell you when you step outside. Put anything fancy in `tools/`.

@@ -20,7 +20,7 @@ see [DECISIONS.md](DECISIONS.md). **Overall plan:** [PLAN.md](PLAN.md).
 | `tools/Parley.Tools` | The `parley` command-line tool: map importer, map generator, rule tests, bot simulations. |
 | `tests/Parley.Tests` | Automated tests. `tests/datc` holds the DATC rule test cases. |
 | `maps/` | Generated "Ring" test maps (`.pmap` text files). |
-| `docs/` | Design notes for the VR world, variant research. |
+| `docs/` | Design notes: the VR world, variant research, [secret orders and dice](docs/secret-orders-and-dice.md), [the Renaissance ruleset's rulings](docs/machiavelli-rulings.md), [fog of war](docs/fog-of-war.md), [VRChat sync and recovery](docs/vrchat-sync-design.md). |
 | `web/` | Flat web client for playing over Discord before the VR world exists. |
 | `scripts/` | Helper scripts. |
 
@@ -110,6 +110,31 @@ Start the web client (then open http://localhost:5080; see [web/README.md](web/R
 dotnet run --project web/Parley.Web
 ```
 
+Play random games of the Renaissance ruleset ("Purse and Dagger") with consistency checks,
+on the small test board or on the fetched Italy board:
+
+```bash
+dotnet run --project tools/Parley.Tools -- purse-sim tests/purse/valleys.pmap 50
+```
+
+```bash
+dotnet run --project tools/Parley.Tools -- purse-sim maps-local/italy1454.pmap 20
+```
+
+To play it in the web client, start the server and choose "Italy 1454" as the map (the
+fetch script installs it; it is drawn as dots and lines, because Parley has no picture
+of that board).
+
+Automated browser playtest (whole games through the page; needs Node and Playwright):
+
+```bash
+dotnet build web/Parley.Web
+```
+
+```bash
+node web/e2e/playtest.js standard ring5 valleys
+```
+
 ## The engine in one paragraph
 
 `MapData` loads a `.pmap` file. `BoardState` is the position. `Adjudicator` takes orders
@@ -121,6 +146,14 @@ saves the whole game as one line of text. `OrderSeal` seals a secret order sheet
 piece is heading and what became of it. `GameFlow` runs the game: seats, the timer
 schedule, submit toggle, sealing and opening, announcement, ready-up, pause, drop/rejoin,
 resume and roll-back. None of them knows any particular map or player count.
+
+**Rulesets.** The game flow reaches the rules only through `Ruleset`. `StandardRules` is
+the standard game; `PurseRules` is "Purse and Dagger", the Renaissance game with money,
+bribes, garrisons, sieges, rebellions, assassins, famine and plague
+([rulings](docs/machiavelli-rulings.md)). `Adjudicator` is the referee both share.
+`Dice` rolls from a seed that every player's sealed sheet contributes to
+([how](docs/secret-orders-and-dice.md)). `Visibility` says what a power sees under fog
+of war ([what that can and cannot hide](docs/fog-of-war.md)).
 
 ## Map format (`.pmap`)
 
@@ -154,6 +187,14 @@ Provinces with two separate coasts add `coast spa nc` / `coast spa sc` lines and
 the coast in fleet links (`fleet mao: spa/nc spa/sc`). Optional `xy` and `shape` lines
 give label positions and outlines for boards. `victory N` and `build any` override the
 defaults (more than half the centres; build in home centres only).
+
+Optional lines for other calendars and rulesets: `seasons Spring Summer Fall* Winter`
+(movement seasons in order, a star after those at whose end centres change hands, then
+the name of the adjustment time), `rules purse famine loans ...` (the ruleset and its
+default options; no line means the standard game), `city <prov> walled|open <income>
+[port] [single]`, `convoy coastal` (fleets in coastal provinces may convoy), and
+`x ...` lines that only a particular ruleset reads (tables). `tests/purse/valleys.pmap`
+is a small complete example.
 
 ## Licence
 

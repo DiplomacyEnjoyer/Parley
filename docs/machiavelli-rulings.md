@@ -122,6 +122,11 @@ nothing; nor does its city, unless a garrison holds the city. *Cases C.6, D.3, F
     failed bribes and failed assassination attempts. The judge tells only the people
     concerned. With sealed sheets there is no neutral party who could keep a secret.
 
+16a. **(differs) Treasuries, debts and tokens are public.** Every device holds the whole
+    position (it has to, to check the result for itself), so a treasury could not be
+    hidden from a modified client anyway; the page and the VR world show them openly
+    rather than pretend. Hidden treasuries belong with fog of war (`docs/fog-of-war.md`).
+
 ## Garrisons, conversions, sieges
 
 17. **A walled city is a space of its own inside its province** (the judge's own

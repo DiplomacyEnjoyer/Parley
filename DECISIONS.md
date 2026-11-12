@@ -754,3 +754,63 @@ human who knows the game should read `docs/machiavelli-rulings.md`.
 *Alternative considered:* writing the ruleset as its own referee. Rejected (decision
 23): garrisons-as-spaces lets the DATC-verified referee do all the fighting; the module
 only decides what money does before and what cities, rebels and control do after.
+
+## 27. Fog of War: honour system in VR, a neutral judge when it must be real
+
+Full reasoning: `docs/fog-of-war.md`.
+
+**The finding.** Secret orders can be made tamper-proof without a referee because they
+are secret only until the reveal. Fog is secret for the whole game, and resolving a
+turn needs every position and every order in one place. Whatever does that knows
+everything. So real fog needs a referee that the players trust not to look, or
+cryptography far beyond what Udon can run.
+
+**Recommendation (YOUR CALL, nothing blocks on it):**
+
+1. In the VR world, build fog as an **honour system**: every device holds the full
+   position, each player is shown only what their power sees. Safe against everything
+   but a deliberately modified client; cannot be proven either way. Label it honestly
+   in the menu.
+2. For games where it must be real, run them on the **web judge** hosted by a
+   non-player; the server tells each browser only its own view. Not built yet (the
+   engine rule is; the server filtering is perhaps a day's work).
+3. Test in the Unity phase whether VRChat's owner-targeted network events are private.
+   If so, a non-playing referee client in the instance could replace the web judge.
+
+**Built:** the engine rule, `Visibility.cs` (what a power sees: its units and centres
+and what touches them; which announcement lines it witnessed), with tests.
+
+*Alternatives considered:* the host as referee (gives one player the whole map);
+multi-party computation (possible on paper; minutes to hours per turn in Udon and
+months of specialist work); each player keeping their own units secret and revealing
+them to those in sight (deciding who is in sight is itself a computation on
+everybody's secrets).
+
+## 28. VRChat sync and recovery
+
+Design only, for the Unity phase: `docs/vrchat-sync-design.md`. The decisions in it:
+
+- **One hub keeps time; every device checks it.** The hub (owner of one object, at
+  first the instance master) runs the game flow. Every other device runs the same
+  engine on the same data and checks each phase: seals frozen as published, the phase
+  closed fairly, sheets match seals, dice follow from the opened secrets, the result
+  equals its own calculation. *Alternative considered:* no hub, every transition by
+  agreement. Rejected: devices would disagree by fractions of a second about late
+  seals; one checkable clock-keeper is simpler.
+- **Each player's seal and opened sheet live in an object only that player can write.**
+  The hub cannot forge them, and they survive the hub.
+- **Two texts carry everything:** the archive (in pages, so a phase re-sends one page)
+  and the live state of the phase in progress (`GameFlow.LiveState`, built in this
+  session). A late joiner or a new hub needs nothing else.
+- **Host drop:** the next device loads archive and live state and re-reads the players'
+  objects. Worst case it resolves the last phase again, with an identical result.
+- **Saves:** after every phase each seated player's device writes the archive to that
+  player's own PlayerData. Next week the world compares the saves of whoever is
+  present; the save most of them hold is offered. Suggested archive budget in VR:
+  40,000 characters (PlayerData is about 100 KB per player and text may count double).
+- **Accepted weakness:** a headset that restarts mid-phase loses its sheet and salt,
+  because VRChat has no private storage. Before the freeze the player rewrites the
+  sheet; after it, their units hold that turn.
+
+Everything about VRChat's own behaviour in that document is from memory of its
+documentation (the sites were unreachable) and is listed there as "to verify".
