@@ -53,7 +53,9 @@ async function startServer(fresh) {
   base = 'http://127.0.0.1:' + port;
   server = spawn('dotnet', [DLL], { cwd: ROOT, env: Object.assign({}, process.env, { PARLEY_URL: base, PARLEY_DATA: dataDir, PARLEY_AWAY_SECONDS: String(AWAY), PARLEY_MAPS: path.join(ROOT, 'tests', 'purse') }), stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
-  server.stdout.on('data', d => out += d); server.stderr.on('data', d => out += d);
+  // PLAYTEST_SERVER_LOG=<file>: keep everything the server prints (useful when a check times out)
+  const keep = d => { out += d; if (process.env.PLAYTEST_SERVER_LOG) fs.appendFileSync(process.env.PLAYTEST_SERVER_LOG, d); };
+  server.stdout.on('data', keep); server.stderr.on('data', keep);
   for (let i = 0; i < 100; i++) { try { await fetch(base + '/api/maps'); return out; } catch { await sleep(200); } }
   throw new Error('server did not start: ' + out);
 }
@@ -391,7 +393,13 @@ async function playPurse(mapId) {
   const [ada, bo, cy] = players;
   const unitAt = (s, id) => { const i = s.unitsById[id]; return i; };
   const st = async p => p.page.evaluate(() => Object.assign({}, S, { unitsById: Object.fromEntries(S.units.map(u => [M.locs[u.l].id, u])) }));
-  const everyoneSubmits = async serial => { for (const p of players) if ((await state(p)).my && (await state(p)).my.needs) await toggleSubmit(p, true); return nextPhase(host, 120000, serial); };
+  const everyoneSubmits = async serial => {
+    for (const p of players) {
+      await waitFor(p, v => S.serial === v && S.stage === 1 && S.my, serial, 20000); // every page has caught up with the phase
+      if ((await state(p)).my.needs) await toggleSubmit(p, true);
+    }
+    return nextPhase(host, 120000, serial);
+  };
 
   // ---- the opening winter: income has been paid, every unit must be paid for
   await host.page.click('#hStart');
@@ -401,11 +409,13 @@ async function playPurse(mapId) {
   check(JSON.stringify(s.purse.treasury.slice(0, 3)) === '[9,8,9]', 'opening income: ' + s.purse.treasury);
   check(await host.page.evaluate(() => seasonName(S.label)) === 'Winter of year 1399, paying the troops', 'the page names the phase');
   check(!!(await host.page.$('#mDis')), 'the treasury panel is shown in winter');
+  const spread = await host.page.evaluate(() => { const xs = M.provs.filter(p => p.type !== 3).map(p => p.x), ys = M.provs.filter(p => p.type !== 3).map(p => p.y); return Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)); });
+  check(spread > 500, 'the board is laid out across the page (cities sit with their provinces): ' + spread);
   s = await everyoneSubmits(s.serial);
   await readyAll(players);
   s = await st(host);
   check(s.label === 'S1400M', 'then the first spring campaign: ' + s.label);
-  check(JSON.stringify(s.purse.treasury.slice(0, 3)) === '[0,2,0]', 'everybody paid 3 ducats a unit: ' + s.purse.treasury);
+  check(JSON.stringify(s.purse.treasury.slice(0, 3)) === '[0,2,3]', 'everybody paid 3 ducats a unit: ' + s.purse.treasury);
   check(!s.unitsById.bport && s.seats[1].units === 2, 'Blue could not pay for its third unit, which went home');
   const winter = await lastResults(host);
   check(winter.orders.some(o => /Blueport is removed/.test(o.text)), 'the history says so: ' + winter.orders.map(o => o.text).join(' | '));
@@ -444,7 +454,7 @@ async function playPurse(mapId) {
   check(s.label === 'U1400M', 'summer follows spring: ' + s.label);
   check(!s.unitsById.bfield, 'the bribed army has disbanded');
   check(s.purse.treasury[0] === 8 && s.purse.debt[0] === 24, "Ada's books: 20 borrowed, 12 spent, 24 owed: " + s.purse.treasury[0] + ' / ' + s.purse.debt[0]);
-  check(s.purse.treasury[2] === 0 && s.purse.debt[2] === 15, "Cy's books: " + s.purse.treasury[2] + ' / ' + s.purse.debt[2]);
+  check(s.purse.treasury[2] === 3 && s.purse.debt[2] === 15, "Cy's books (3 left over, 12 borrowed and spent, 15 owed): " + s.purse.treasury[2] + ' / ' + s.purse.debt[2]);
   check(/^[0-9a-f]{64}$/.test(s.diceSeed), 'the campaign had a dice seed built from the sealed sheets');
   const spring = await lastResults(host);
   const said = spring.orders.map(o => o.text).join(' | ');
@@ -476,6 +486,7 @@ async function playPurse(mapId) {
   check(s.purse.treasury[0] > 8, 'income arrived: ' + s.purse.treasury[0]);
 
   // ---- winter: Cy buys a garrison if the treasury allows, through the panel
+  await waitFor(cy, () => S.stage === 1 && S.my && S.label === 'W1400A', null, 20000);
   const canBuild = await cy.page.evaluate(() => S.my.options.builds.length);
   const before = (await st(host)).seats[2].units;
   if (canBuild && s.purse.treasury[2] >= 9) { await cy.page.click('#mNewGo'); check(/Build/.test(await cy.page.$eval('#side', e => e.textContent)), 'the build is on the sheet'); }

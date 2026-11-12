@@ -199,7 +199,10 @@ public sealed class Lobby
         if (s == null || !Maps.TryGetValue(s.MapId, out var m)) { Console.WriteLine($"saved game {file}: map '{s?.MapId}' is not installed"); return; }
         var wg = new WebGame { Id = s.Id, Title = s.Title, Created = s.Created, Info = m, G = Game.FromPmap(m.Pmap), HostToken = s.Host };
         int order = 0;
-        foreach (var (token, name) in s.Players) wg.Players[token] = new Player { Name = name, LastSeen = -1000, JoinOrder = order++ };
+        // Everybody counts as here until their browsers have had time to check in again. Otherwise the
+        // first browser back after a restart would be "everyone present", and if it had already
+        // submitted, the phase would close before the others reconnected.
+        foreach (var (token, name) in s.Players) wg.Players[token] = new Player { Name = name, LastSeen = Now, JoinOrder = order++ };
         var f = wg.G.Flow; var h = wg.G.History;
         f.Stir(Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
         WebDefaults(f);

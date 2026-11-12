@@ -15,7 +15,7 @@ public static class AutoLayout
 {
     public static (int[] x, int[] y) Compute(MapData map, int size = 1000)
     {
-        int n = map.provCount;
+        int n = map.landCount; // walled-city entries have no links of their own; they are placed with their province below
         var px = new double[n]; var py = new double[n];
         var rng = new Random(12345);
         for (int i = 0; i < n; i++)
@@ -58,12 +58,13 @@ public static class AutoLayout
         }
         // fit into the square with a margin
         double minX = px.Min(), maxX = px.Max(), minY = py.Min(), maxY = py.Max();
-        var rx = new int[n]; var ry = new int[n];
+        var rx = new int[map.provCount]; var ry = new int[map.provCount];
         for (int i = 0; i < n; i++)
         {
             rx[i] = (int)(40 + (px[i] - minX) / Math.Max(1, maxX - minX) * (size - 80));
             ry[i] = (int)(40 + (py[i] - minY) / Math.Max(1, maxY - minY) * (size - 80));
         }
+        for (int i = n; i < map.provCount; i++) { rx[i] = rx[map.cityProv[i]]; ry[i] = ry[map.cityProv[i]]; }
         return (rx, ry);
     }
 }
