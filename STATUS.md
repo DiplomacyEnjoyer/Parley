@@ -1,6 +1,29 @@
 # Status
 
-*Last updated at the end of the second session.*
+*Third session ("hard design" session) in progress. This block is kept current after
+every step so that anyone, human or model, can pick up exactly here.*
+
+## Third session: where things stand right now
+
+| Step | State |
+|---|---|
+| 1. Rulesets as modules | **Done, tested, on main.** `Ruleset.cs` (the door), `StandardRules.cs` (the standard game), `Adjudicator.cs` (shared referee). DECISIONS §23. DATC 165/165; old and new engine give byte-identical answers on 20,000 situations and 400 games; cross-checks and browser playtest pass. |
+| 2. Tamper-proof orders reviewed; fair dice | **Done, tested, on main.** `docs/secret-orders-and-dice.md`, DECISIONS §24, §25, `AdversaryTests`. |
+| 3. Renaissance ruleset ("Purse and Dagger") | **In progress.** Done: the module `PurseRules.cs`, importer for the nJudge board (`parley import-njudge-mach`), random-play harness (`parley purse-sim`, thousands of phases, no problems), a small original test board (`tests/purse/valleys.pmap`), test helper `tests/Parley.Tests/PurseBoard.cs`. **Left:** hand-written rule cases (`PurseTests.cs`), `docs/machiavelli-rulings.md`, DECISIONS §26, fetch script and THIRD_PARTY entry for the nJudge files, web client (treasury, expenses, garrison orders) and its browser playtest. |
+| 4. Fog of war | Not started (`docs/fog-of-war.md`, engine-side visibility filter if time). |
+| 5. VRChat sync design | Not started (`docs/vrchat-sync-design.md`). |
+
+Branch note: work is committed on `claude/youthful-pasteur-9satoz` and fast-forwarded to
+`main` after each verified step (no other session was active on main).
+
+Reference material used for step 3 (not committed): the nJudge 0.8.10 source archive
+from SourceForge (`data/rules.machiavelli`, `data/map.machiavelli`, `data/seed.9`).
+diplom.org and VRChat's documentation sites are blocked from this machine. The
+Condottieri project is AGPL-3.0: ideas only, no code.
+
+---
+
+*Below: status as of the end of the second session.*
 
 ## Read this first
 
