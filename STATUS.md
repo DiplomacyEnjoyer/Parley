@@ -4,6 +4,40 @@
 tasks you set were worked through in order; what is finished, what is partly finished
 and what is left is listed below. Everything is committed and on `main`.*
 
+## Handoff (latest; read before anything else)
+
+*Written at the end of the last Fable session. The owner's goal now: a **minimum VR world
+for the classic board**, so friends can playtest in VRChat. Not more rulesets or variants.*
+
+**State:** `main` builds; 354 tests pass. Rules engine proven (DATC 165/165; Python
+engine and godip agree on whole games). The web client plays the full turn flow.
+Nothing exists in Unity yet.
+
+**Biggest risk:** the VR networking (sealed orders across headsets, host handover, late
+joiners, saves in PlayerData). It is a design only: `docs/vrchat-sync-design.md`.
+
+**Next steps, in order, with the model each needs:**
+
+1. **Networking layer + simulated VRChat** (Opus, high effort, a session to itself).
+   Spec and acceptance tests: `docs/vr-network-scenarios.md`. Engine-subset C#, tested
+   in .NET against a fake VRChat. Then a separate Opus session reviews it (`/code-review`).
+2. **Unity-side scene scripts** for the minimum world (Sonnet): flat board, list-based
+   order sheet with big tap targets, submit toggle, Ready, clock, announcement as text.
+   See `docs/vr-world-design.md` §4 for hand-tracking limits.
+3. **`docs/unity-setup.md`** (Sonnet): step-by-step install, import, scene, two-headset
+   test for the owner.
+4. **Owner, on their own computer:** open in Unity, compile, fix errors with a Sonnet
+   session (escalate a stuck Udon problem to Opus); measure speed on a Quest; check the
+   table at the end of `docs/vrchat-sync-design.md`.
+5. Private upload; playtest with friends. Visuals afterwards.
+
+**Out of scope for now:** Renaissance ruleset, fog of war, more variants, 1900.
+
+**Open for the owner:** pausing rule (DECISIONS §21); delete the `initial-engine` branch
+on GitHub by hand.
+
+---
+
 ## Read this first
 
 1. **The engine now has pluggable rulesets.** The standard game is one module; nothing
