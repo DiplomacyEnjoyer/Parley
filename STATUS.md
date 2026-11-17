@@ -46,7 +46,31 @@ client plays the full turn flow. Nothing exists in Unity yet.
   session itself. Starting sessions was not in the owner's instructions to this session,
   so it was left for the owner or the scheduled manager.
 
-**Next:** a separate Opus session reviews the networking (`/code-review`), then step 2.
+**200-seed run** (`PARLEY_NET_SEEDS=200`, 39 scenarios, 7,800 runs, ~27 min): 7,791
+passed on the build of commit 2348f54. The 9 failures and what happened to them:
+
+- B5 seed 158 (false "closed while still writing" on a device that rejoined during the
+  phase): **fixed**; B3, B5 and E2 now pass all 200 seeds.
+- C7 seeds 59, 84, 187 (after "host here", the slow former hub lags the new hub by about
+  two minutes before catching up): **open**. Storing pages and records that arrive while
+  a device still believes it is hub changed which seeds fail (now 4, 39, 73, 175) but did
+  not cure it. Reproduce: `PARLEY_NET_SEEDS=4 dotnet test --filter NetScenarioTests.C7`.
+  Suspects: the epoch tie when the new hub never received the old hub's epoch, and the
+  slow device's late view of the owner.
+- D6 seeds 25, 124: **open, and bigger than it looked.** Once the archive is trimmed of
+  old *positions* (only after ~40,000 characters, i.e. very long games; D6 forces it with
+  a 4,000-character budget), `history.count` stops growing, so (a) `NetNode.PhaseId()`
+  (`timeline.count`) repeats from phase to phase, (b) the hub's "did I resolve?" test
+  (`count == preCount + 1`) fails and no records are published, so checkers fall back to
+  unchecked catch-up, and (c) the harness's own resolution detection misses them. D6
+  passes today only because it does not demand much progress after the resume. An
+  unfinished fix (phase id with the position's checksum, resolution = newest position
+  changed, records matched by position) is in `docs/wip/net-trimming-wip.patch`; with it,
+  checkers sometimes trim one position less than the hub and lag (cause not found), and
+  C7 seed 4 got worse, so it was not applied. Fix this before anyone plays a long game.
+
+**Next:** a separate Opus session reviews the networking (`/code-review`), starting with
+the two open items above; then step 2.
 
 **Next steps after that, in order, with the model each needs:**
 

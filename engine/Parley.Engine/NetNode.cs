@@ -174,6 +174,7 @@ namespace Parley.Engine
         private int tokenMs = -1;
         private int lastResendMs;
         private int resendPage;
+        private int pageCount = 1;
 
         // ---- saves seen this session (D) ----
         public string[] saveName;
@@ -265,9 +266,11 @@ namespace Parley.Engine
         {
             if (text == null) text = "";
             if (objectId == HUB) { TakeHub(text); return; }
-            if (objectId == RECORDS) { if (!isHub) { recText = text; followDirty = true; } return; }
+            // kept even while this device thinks it is hub: it may be the new hub's, sent before
+            // this device has heard that it lost the hub
+            if (objectId == RECORDS) { recText = text; followDirty = true; return; }
             int k = ObjIndex(objectId);
-            if (k >= 2) { if (!isHub) { pageText[k - 2] = text; followDirty = true; } return; }
+            if (k >= 2) { pageText[k - 2] = text; followDirty = true; return; }
             if (objectId.Length > SLOT.Length && objectId.Substring(0, SLOT.Length) == SLOT)
             {
                 string name = history.UnescapeName(objectId.Substring(SLOT.Length));
@@ -411,7 +414,7 @@ namespace Parley.Engine
             {
                 lastResendMs = nowMs;
                 slotDirty = true;
-                if (isHub) { recDirty = true; pageSent[resendPage] = ""; resendPage = (resendPage + 1) % MAX_PAGES; }
+                if (isHub) { recDirty = true; resendPage = (resendPage + 1) % pageCount; pageSent[resendPage] = ""; }
             }
             if (isHub)
             {
@@ -468,7 +471,7 @@ namespace Parley.Engine
         private void CheckFairClose(int p, string pid)
         {
             if (p < 0 || flow.sealText[p] != "" || !flow.NeedsSeal(p) || alarmedPhase == pid) return;
-            if (stepMs - firstStepMs < 15000) return;
+            if (stepMs - firstStepMs < 15000 || seatSincePhase == pid) return;
             if (flow.closeReason != GameFlow.CLOSED_ALL_SUBMITTED && flow.seatPresent[p]) return;
             alarmedPhase = pid;
             Alarm(acceptedHub + " closed the phase while this device was still writing (" + map.powerName[p] + " was treated as absent)");
@@ -593,6 +596,7 @@ namespace Parley.Engine
             string archive = CachedArchive();
             int pages = (archive.Length + PAGE_CHARS - 1) / PAGE_CHARS;
             if (pages > MAX_PAGES) { pages = MAX_PAGES; Alarm("the archive is too long for the pages; lower maxArchiveChars"); }
+            pageCount = pages < 1 ? 1 : pages;
             string sum = codec.Checksum(archive);
             string seats = SeatsText();
             string sig = maxEpoch.ToString() + "|" + sum + "|" + seats + "|" + flow.LiveState(0);

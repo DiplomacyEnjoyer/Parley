@@ -904,6 +904,10 @@ changed or settled these points of `docs/vrchat-sync-design.md`:
   submitted, or listed this present player as absent. A host who closes on time while a
   slow device's seal is still on its way is not flagged: the device seals at the
   deadline by itself and has the five seconds of grace.
+- *Open: long games.* Once trimming drops old positions the archive length stops
+  growing, and the phase id and resolution detection that rely on it break (see STATUS,
+  "200-seed run"). Until fixed, keep `maxArchiveChars` large (40,000) so that only orders
+  are trimmed in a normal-length game.
 - *Alarms are shared, not proven.* A device can claim any alarm in its own slot; the
   alarm names who raised it, and players judge. A lying device can cause doubt, not a
   wrong game.

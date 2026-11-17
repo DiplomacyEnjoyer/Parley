@@ -1,0 +1,239 @@
+diff --git a/engine/Parley.Engine/NetNode.cs b/engine/Parley.Engine/NetNode.cs
+index cabf364..39658de 100644
+--- a/engine/Parley.Engine/NetNode.cs
++++ b/engine/Parley.Engine/NetNode.cs
+@@ -174,6 +174,7 @@ namespace Parley.Engine
+         private int tokenMs = -1;
+         private int lastResendMs;
+         private int resendPage;
++        private int pageCount = 1;
+ 
+         // ---- saves seen this session (D) ----
+         public string[] saveName;
+@@ -265,9 +266,11 @@ namespace Parley.Engine
+         {
+             if (text == null) text = "";
+             if (objectId == HUB) { TakeHub(text); return; }
+-            if (objectId == RECORDS) { if (!isHub) { recText = text; followDirty = true; } return; }
++            // kept even while this device thinks it is hub: it may be the new hub's, sent before
++            // this device has heard that it lost the hub
++            if (objectId == RECORDS) { recText = text; followDirty = true; return; }
+             int k = ObjIndex(objectId);
+-            if (k >= 2) { if (!isHub) { pageText[k - 2] = text; followDirty = true; } return; }
++            if (k >= 2) { pageText[k - 2] = text; followDirty = true; return; }
+             if (objectId.Length > SLOT.Length && objectId.Substring(0, SLOT.Length) == SLOT)
+             {
+                 string name = history.UnescapeName(objectId.Substring(SLOT.Length));
+@@ -335,7 +338,25 @@ namespace Parley.Engine
+ 
+         public int MyPower() { return flow.SeatOf(me); }
+ 
+-        public string PhaseId() { return flow.timeline + "." + history.count.ToString(); }
++        /// <summary>
++        /// Names the phase in progress: the run, the archive length and a checksum of the
++        /// position. The length alone is not enough: once a long game is trimmed, the
++        /// archive stops growing while phases go on.
++        /// </summary>
++        public string PhaseId()
++        {
++            string key = flow.timeline + "|" + history.count.ToString() + "|" + flow.phaseSerial.ToString();
++            if (key != pidKey) { pidKey = key; pidCache = flow.timeline + "." + history.count.ToString() + "." + BodySum(); }
++            return pidCache;
++        }
++
++        private string pidKey = "";
++        private string pidCache = "";
++
++        // checksum of the position on the board, as the live state carries it
++        private string BodySum() { return codec.Checksum(codec.EncodeBody(flow.state)); }
++
++        private string LastBody() { return history.count > 0 ? history.body[history.count - 1] : ""; }
+ 
+         /// <summary>The submit toggle on: seals the sheet as it is now and publishes only the seal.</summary>
+         public bool SubmitOn()
+@@ -411,7 +432,7 @@ namespace Parley.Engine
+             {
+                 lastResendMs = nowMs;
+                 slotDirty = true;
+-                if (isHub) { recDirty = true; pageSent[resendPage] = ""; resendPage = (resendPage + 1) % MAX_PAGES; }
++                if (isHub) { recDirty = true; resendPage = (resendPage + 1) % pageCount; pageSent[resendPage] = ""; }
+             }
+             if (isHub)
+             {
+@@ -468,7 +489,7 @@ namespace Parley.Engine
+         private void CheckFairClose(int p, string pid)
+         {
+             if (p < 0 || flow.sealText[p] != "" || !flow.NeedsSeal(p) || alarmedPhase == pid) return;
+-            if (stepMs - firstStepMs < 15000) return;
++            if (stepMs - firstStepMs < 15000 || seatSincePhase == pid) return;
+             if (flow.closeReason != GameFlow.CLOSED_ALL_SUBMITTED && flow.seatPresent[p]) return;
+             alarmedPhase = pid;
+             Alarm(acceptedHub + " closed the phase while this device was still writing (" + map.powerName[p] + " was treated as absent)");
+@@ -525,9 +546,11 @@ namespace Parley.Engine
+             string preSeats = SeatsText();
+             int preCount = history.count;
+             string preLine = flow.timeline;
++            string preBody = LastBody();
+             if (force) flow.ForceNext(now); else flow.Tick(now);
+-            if (history.count != preCount) Canonical();
+-            if (history.count == preCount + 1 && flow.timeline == preLine) AddRecord(preCount.ToString() + "~" + preSeats + "~" + Tenths(now) + "~" + pre);
++            bool moved = history.count != preCount || LastBody() != preBody;
++            if (moved) Canonical();
++            if (moved && flow.timeline == preLine && preCount > 0) AddRecord(preCount.ToString() + "~" + preSeats + "~" + Tenths(now) + "~" + pre);
+             ReadSlots();
+         }
+ 
+@@ -593,6 +616,7 @@ namespace Parley.Engine
+             string archive = CachedArchive();
+             int pages = (archive.Length + PAGE_CHARS - 1) / PAGE_CHARS;
+             if (pages > MAX_PAGES) { pages = MAX_PAGES; Alarm("the archive is too long for the pages; lower maxArchiveChars"); }
++            pageCount = pages < 1 ? 1 : pages;
+             string sum = codec.Checksum(archive);
+             string seats = SeatsText();
+             string sig = maxEpoch.ToString() + "|" + sum + "|" + seats + "|" + flow.LiveState(0);
+@@ -656,10 +680,11 @@ namespace Parley.Engine
+ 
+             // the hub resolved phases: check each from its record by resolving it myself
+             int guard = 0;
+-            while (hc > history.count && line == flow.timeline && history.count > 0 && guard < KEEP_RECORDS + 1)
++            while (line == flow.timeline && history.count > 0 && guard < KEEP_RECORDS + 1
++                && (hc > history.count || (hc == history.count && lf[4] != BodySum())))
+             {
+                 guard++;
+-                string rec = FindRecord(history.count, flow.timeline);
++                string rec = FindRecord(history.count, flow.timeline, BodySum());
+                 if (rec == "")
+                 {
+                     // the record travels in another object and may come a little later than the hub state
+@@ -680,6 +705,12 @@ namespace Parley.Engine
+                     return;
+                 }
+             }
++            if (hc != history.count && line == flow.timeline && lf[4] == BodySum())
++            {
++                // the same position, trimmed to a different length: take the hub's archive
++                TrySync(lf, writeT, line);
++                return;
++            }
+             if (hc < history.count && line == flow.timeline)
+             {
+                 // a new hub that has not caught up yet: wait for it; the same hub going backwards is a rewrite
+@@ -712,7 +743,7 @@ namespace Parley.Engine
+             acceptedEpoch = hubEpoch;
+         }
+ 
+-        private string FindRecord(int count, string line)
++        private string FindRecord(int count, string line, string bodySum)
+         {
+             if (recText == "") return "";
+             string[] r = recText.Split('\t');
+@@ -723,7 +754,7 @@ namespace Parley.Engine
+                 string[] q = r[i].Split('~');
+                 if (q.Length != 4) continue;
+                 string[] lf = q[3].Split('|');
+-                if (lf.Length > 1 && lf[1] == line) return r[i];
++                if (lf.Length > 4 && lf[1] == line && lf[4] == bodySum) return r[i];
+             }
+             return "";
+         }
+@@ -746,9 +777,9 @@ namespace Parley.Engine
+                 CheckFrozen(p, PhaseId(), flow.sealText[p], false);
+                 if (flow.stage == GameFlow.STAGE_REVEAL || !flow.seatPresent[p]) CheckFairClose(p, PhaseId());
+             }
+-            int before = history.count;
+-            for (int k = 1; k <= 4 && history.count == before; k++) flow.ForceNext(t + 1000 * k);
+-            if (history.count != before + 1)
++            string before = LastBody(); int beforeCount = history.count;
++            for (int k = 1; k <= 4 && LastBody() == before && history.count == beforeCount; k++) flow.ForceNext(t + 1000 * k);
++            if (LastBody() == before && history.count == beforeCount)
+             {
+                 Alarm("could not resolve " + acceptedHub + "'s last phase here");
+                 return false;
+@@ -757,8 +788,8 @@ namespace Parley.Engine
+             Canonical();
+             // after resolving, the hub's seats are what count (someone may have sat down since)
+             string archive = flow.Archive();
+-            int hc = map.ParseInt(hubLive.Split('|')[3], -1);
+-            if (hc == history.count)
++            string[] hl = hubLive.Split('|');
++            if (hl.Length > 4 && map.ParseInt(hl[3], -1) == history.count && hl[4] == BodySum())
+             {
+                 MirrorSeats(hubSeats);
+                 archive = flow.Archive();
+@@ -841,7 +872,7 @@ namespace Parley.Engine
+         {
+             if (history.count == 0 || MyPower() < 0) return;
+             if (!isHub && (hubEpoch == stuckEpoch || acceptedEpoch < 0)) return;
+-            string sig = flow.timeline + "." + history.count.ToString();
++            string sig = PhaseId();
+             if (sig == savedSig) return;
+             savedSig = sig;
+             saveOut = CachedArchive();
+diff --git a/tests/Parley.Tests/NetScenarioTests.cs b/tests/Parley.Tests/NetScenarioTests.cs
+index ae9a462..da1eeca 100644
+--- a/tests/Parley.Tests/NetScenarioTests.cs
++++ b/tests/Parley.Tests/NetScenarioTests.cs
+@@ -31,6 +31,7 @@ public class NetScenarioTests
+     public static IEnumerable<object[]> OneSeed() => Seeds(1);
+ 
+     /// <summary>Everybody joins, takes a seat, and the first to arrive starts the game.</summary>
++    public static VrSim LastSim;
+     public static VrSim Table(int seed, VrSim.Settings s = null, int players = -1)
+     {
+         var sim = new VrSim(Map, seed, s);
+@@ -483,6 +484,7 @@ public class NetScenarioTests
+     private static VrSim NextSession(VrSim old, int seed, IEnumerable<string> who, VrSim.Settings s = null)
+     {
+         var sim = new VrSim(Map, seed + 1000, s ?? old.S, old.Cloud);
++        LastSim = sim;
+         foreach (var n in who) { sim.Join(n); sim.RunFor(1000 + sim.Rng.Next(10_000)); }
+         return sim;
+     }
+@@ -606,8 +608,8 @@ public class NetScenarioTests
+         Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 1, 60_000));
+         Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+         ResumeOffer(next, 0);
+-        int c = Phases(next);
+-        Assert.True(next.RunUntil(() => Phases(next) >= c + 3 || next.Hub.G.History.CodeAt(next.Hub.G.History.count - 1) != sim.Devices[0].G.Flow.CurrentCode(), 3600_000));
++        int r = next.Resolutions; // the archive no longer grows once it is trimmed, so count resolutions
++        Assert.True(Finished(next) || next.RunUntil(() => next.Resolutions >= r + 6 || Finished(next), 3600_000), "the resumed game did not go on");
+         Done(next);
+         next.CheckSaves();
+         Assert.Empty(next.Violations);
+diff --git a/tools/Parley.Tools/VrSim.cs b/tools/Parley.Tools/VrSim.cs
+index 53b3f9b..a649d30 100644
+--- a/tools/Parley.Tools/VrSim.cs
++++ b/tools/Parley.Tools/VrSim.cs
+@@ -408,8 +408,9 @@ public sealed class VrSim
+             if (!d.Present) continue;
+             foreach (var kv in d.LocalOwner) d.Node.OnOwner(kv.Key, kv.Value); // Networking.GetOwner, every tick
+             int beforeCount = d.G.History.count; string beforeLine = d.G.Flow.timeline; string beforePid = d.Node.PhaseId();
++            string beforeBody = beforeCount > 0 ? d.G.History.body[beforeCount - 1] : "";
+             d.Node.Step((int)Now);
+-            Observe(d, beforeCount, beforeLine, beforePid);
++            Observe(d, beforeCount, beforeLine, beforePid, beforeBody);
+             Drain(d);
+         }
+         if (Now % 1000 < S.StepMs) CheckContinuously();
+@@ -466,15 +467,18 @@ public sealed class VrSim
+     }
+ 
+     // after a device's step: freezes (for the spy), resolutions (engine truth, no silent loss)
+-    private void Observe(Device d, int beforeCount, string beforeLine, string beforePid)
++    private void Observe(Device d, int beforeCount, string beforeLine, string beforePid, string beforeBody)
+     {
+         var f = d.G.Flow; var n = d.Node;
+         string pid = n.PhaseId();
+         if (f.stage == GameFlow.STAGE_REVEAL && !d.SawFrozenAt.ContainsKey(pid)) d.SawFrozenAt[pid] = Now;
+-        if (d.G.History.count > beforeCount && !d.SawFrozenAt.ContainsKey(beforePid)) d.SawFrozenAt[beforePid] = Now;
++        var hist = d.G.History;
++        // a resolution: the newest position changed in the same run (the archive need not grow: it may be trimmed)
++        bool resolved = f.timeline == beforeLine && beforeCount > 0 && hist.count >= 2 && (hist.count != beforeCount || hist.body[hist.count - 1] != beforeBody);
++        if (resolved && !d.SawFrozenAt.ContainsKey(beforePid)) d.SawFrozenAt[beforePid] = Now;
+         if (!n.isHub || !d.Honest) return;
+         if (f.stage == GameFlow.STAGE_REVEAL) Freeze(pid);
+-        if (d.G.History.count == beforeCount + 1 && f.timeline == beforeLine)
++        if (resolved)
+         {
+             Freeze(beforePid);
+             Resolutions++;
