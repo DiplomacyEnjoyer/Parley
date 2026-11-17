@@ -875,5 +875,18 @@ changed or settled these points of `docs/vrchat-sync-design.md`:
 - *Clock:* times are float seconds since the session start that the first hub
   publishes; VRChat's millisecond server time wraps after about 24 days, which a single
   session never reaches.
-- *Not yet modelled:* adversaries (E) and the explicit limit runs (F) of the spec, except
-  that every run measures peak bytes per second, largest send and largest save.
+- *Adversaries (E1-E8) are detected as the spec asks, with these limits:* the hub's
+  forged seal (E1), early close (E2) and a forged seal written through a stolen slot
+  (E7) are noticed only by the victim's own device, which then shares the alarm in its
+  slot so every device shows it ("Bo: Ada froze a seal for England that this device
+  never made"). A wrong result (E3) or rewritten history (E4) is noticed by every
+  device, which keeps its own archive and stops following that hub until another device
+  hosts. A sheet that does not match its seal (E5) or that is never opened (E6) is
+  refused everywhere; those units hold and are counted as "never opened".
+- *"Closed while I was still writing" (E2)* fires only when the hub said everyone had
+  submitted, or listed this present player as absent. A host who closes on time while a
+  slow device's seal is still on its way is not flagged: the device seals at the
+  deadline by itself and has the five seconds of grace.
+- *Alarms are shared, not proven.* A device can claim any alarm in its own slot; the
+  alarm names who raised it, and players judge. A lying device can cause doubt, not a
+  wrong game.

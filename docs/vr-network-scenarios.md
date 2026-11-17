@@ -4,7 +4,11 @@
 networking works; this one says how to prove it before anyone opens Unity. It is the
 specification for a .NET simulation of VRChat ("the harness") and the list of failure
 cases the world's networking code must pass in it. Scope: the classic board, standard
-rules. Nothing here is built yet.*
+rules.*
+
+**Built.** The node is `engine/Parley.Engine/NetNode.cs`, the harness
+`tools/Parley.Tools/VrSim.cs`, the scenarios `tests/Parley.Tests/NetScenarioTests.cs`
+(all pass). What changed in the design while building it: DECISIONS §29.
 
 ## Why a simulation first
 
