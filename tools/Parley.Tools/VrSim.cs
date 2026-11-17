@@ -59,6 +59,8 @@ public sealed class VrSim
         public Dictionary<string, long> SubmittedAt = new();
         public Dictionary<string, long> SawFrozenAt = new();
         public Action<VrSim, Device> Script;
+        /// <summary>A modified client: rewrites what this device sends (object id, text) -> text, or null to send nothing.</summary>
+        public Func<string, string, string> OutFilter;
         // counters
         public long BytesThisSecond; public long Second = -1; public long PeakBytesPerSecond;
         public long MismatchSince = -1;
@@ -129,7 +131,18 @@ public sealed class VrSim
 
     private int R(int lo, int hi) => hi <= lo ? lo : lo + Rng.Next(hi - lo + 1);
 
-    private void Push(Ev e) { e.Seq = seq++; queue.Enqueue(e, (e.Time, e.Seq)); }
+    // joins, leaves and ownership changes reach each device in the order they happened
+    private readonly Dictionary<Device, long> lastControl = new();
+
+    private void Push(Ev e)
+    {
+        if (e.Kind >= 1 && e.Kind <= 3)
+        {
+            if (lastControl.TryGetValue(e.To, out long last) && e.Time < last) e.Time = last;
+            lastControl[e.To] = e.Time;
+        }
+        e.Seq = seq++; queue.Enqueue(e, (e.Time, e.Seq));
+    }
 
     private int Delay(Device to) => R(S.MinDelayMs, S.MaxDelayMs) + to.ExtraDelayMs;
 
@@ -239,6 +252,9 @@ public sealed class VrSim
         return d;
     }
 
+    /// <summary>A modified client takes an object it should not own (if VRChat allowed it).</summary>
+    public void ForceOwner(string obj, Device to) => Transfer(obj, to);
+
     private void Transfer(string obj, Device to)
     {
         string old = OwnerOf(obj);
@@ -256,7 +272,7 @@ public sealed class VrSim
         for (int i = 0; i < NetNode.MAX_PAGES; i++) yield return NetNode.PAGE + i;
     }
 
-    private string SlotId(string name) => NetNode.SLOT + reference.History.EscapeName(name);
+    public string SlotId(string name) => NetNode.SLOT + reference.History.EscapeName(name);
 
     private void Configure(GameFlow f)
     {
@@ -397,7 +413,7 @@ public sealed class VrSim
             d.Chosen = true;
             if (!d.NeverSubmit) d.SubmitAt = Now + R(S.SubmitMinMs, S.SubmitMaxMs);
         }
-        if (taking && d.SubmitAt >= 0 && Now >= d.SubmitAt)
+        if (taking && d.SubmitAt >= 0 && Now >= d.SubmitAt && !d.NeverSubmit)
         {
             d.SubmitAt = -1;
             if (f.NeedsSeal(p) && !n.IsSubmitted() && n.SubmitOn()) d.SubmittedAt[pid] = Now;
@@ -408,7 +424,11 @@ public sealed class VrSim
     private void Drain(Device d)
     {
         var n = d.Node;
-        for (int i = 0; i < n.outCount; i++) Write(d, n.outId[i], n.outText[i]);
+        for (int i = 0; i < n.outCount; i++)
+        {
+            string text = d.OutFilter == null ? n.outText[i] : d.OutFilter(n.outId[i], n.outText[i]);
+            if (text != null) Write(d, n.outId[i], text);
+        }
         n.outCount = 0;
         for (int i = 0; i < n.ownWantCount; i++)
         {

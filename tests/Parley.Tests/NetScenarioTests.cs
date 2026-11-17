@@ -695,7 +695,8 @@ public class NetScenarioTests
     [MemberData(nameof(OneSeed))]
     public void F3_AFullSizeArchiveReachesEveryoneAndALateJoiner(int seed)
     {
-        string archive = LongArchive(seed, 36_000);
+        string archive = "";
+        for (int k = 0; k < 20 && archive.Length < 30_000; k++) archive = LongArchive(seed + 1000 * k, 36_000);
         Assert.True(archive.Length >= 30_000, "the long game is only " + archive.Length + " characters");
         var sim = Table(seed);
         sim.RunFor(5_000);
@@ -713,6 +714,211 @@ public class NetScenarioTests
         sim.Hub.Node.HostResume((int)sim.Now);
         int c = Phases(sim);
         Assert.True(sim.RunUntil(() => Phases(sim) >= c + 2 || Finished(sim), 3600_000));
+        Done(sim);
+    }
+
+    // ------------------------------------------------------------------ E. adversaries (one bad device each)
+
+    private static List<string> AlarmsOn(VrSim.Device d) => Enumerable.Range(0, d.Node.alarmCount).Select(i => d.Node.alarms[i]).ToList();
+    private static List<string> HeardOn(VrSim.Device d) => Enumerable.Range(0, d.Node.heardCount).Select(i => d.Node.heard[i]).ToList();
+
+    /// <summary>Every honest device other than the alarming one has heard its alarm.</summary>
+    private static void EveryoneHeard(VrSim sim, VrSim.Device from, string part)
+    {
+        Assert.True(sim.RunUntil(() => sim.Present.Where(d => d.Honest && d != from).All(d => HeardOn(d).Any(h => h.StartsWith(from.Name + ": ") && h.Contains(part))), 20_000),
+            "not everybody saw " + from.Name + "'s alarm");
+    }
+
+    private static VrSim BadHub(int seed, Action<VrSim, VrSim.Device> script)
+    {
+        var sim = Table(seed, HandoverSettings());
+        var hub = sim.Hub;
+        hub.Honest = false;
+        hub.Script = script;
+        return sim;
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E1_TheHubFreezesASealThePlayerNeverMade(int seed)
+    {
+        string victim = Names[1 + seed % (Map.powerCount - 1)];
+        bool done = false;
+        var sim = BadHub(seed, (sm, h) =>
+        {
+            var f = h.G.Flow; int p = f.SeatOf(victim);
+            if (done || f.stage != GameFlow.STAGE_REVEAL || f.history.count < 3 || f.sealText[p] == "" || f.opened[p]) return;
+            f.sealText[p] = h.G.Seal.Make(h.G.Seal.NextSalt(), p, f.SealKey(), "");
+            done = true;
+        });
+        var v = sim.Find(victim);
+        Assert.True(sim.RunUntil(() => v.Node.alarmCount > 0, 3600_000), "the victim's device did not alarm");
+        Assert.Contains(AlarmsOn(v), a => a.Contains("never made") && a.Contains("Ada"));
+        EveryoneHeard(sim, v, "never made");
+        foreach (var d in sim.Present) if (d != v && d.Honest) Assert.Empty(AlarmsOn(d));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E2_TheHubClosesEarlyTreatingAPresentPlayerAsAbsent(int seed)
+    {
+        string victim = Names[1 + seed % (Map.powerCount - 1)];
+        var s = HandoverSettings(); s.MoveSeconds = 300; s.SubmitMaxMs = 20_000;
+        var sim = Table(seed, s);
+        var v = sim.Find(victim);
+        var hub = sim.Hub; hub.Honest = false;
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 3 && hub.G.State.phase == BoardState.PHASE_MOVE && hub.G.Flow.stage == GameFlow.STAGE_ORDERS, 3600_000));
+        v.NeverSubmit = true; v.Node.SubmitOff(); // still writing
+        hub.Script = (sm, h) => { var f = h.G.Flow; if (f.stage == GameFlow.STAGE_ORDERS) f.seatPresent[f.SeatOf(victim)] = false; };
+        Assert.True(sim.RunUntil(() => v.Node.alarmCount > 0, 600_000), "the victim's device did not alarm");
+        Assert.Contains(AlarmsOn(v), a => a.Contains("still writing"));
+        EveryoneHeard(sim, v, "still writing");
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E3_TheHubPublishesAWrongResult(int seed)
+    {
+        int last = -1;
+        var sim = BadHub(seed, (sm, h) =>
+        {
+            var hist = h.G.History;
+            if (hist.count < 4 || last == hist.count || last > 0) { if (last < 0) last = -1; return; }
+            // the result of the last phase is replaced by "nothing moved"
+            hist.body[hist.count - 1] = hist.body[hist.count - 2].Replace(hist.body[hist.count - 2].Split('.')[0], hist.body[hist.count - 1].Split('.')[0]);
+            h.G.Codec.DecodeBody(hist.body[hist.count - 1], h.G.State);
+            h.G.Flow.phaseSerial++;
+            last = hist.count;
+        });
+        Assert.True(sim.RunUntil(() => sim.Present.Count(d => d.Honest && d.Node.alarmCount > 0) == Map.powerCount - 1, 3600_000), "not every honest device alarmed");
+        foreach (var d in sim.Present.Where(d => d.Honest))
+            Assert.Contains(AlarmsOn(d), a => a.Contains("Ada") && (a.Contains("differs") || a.Contains("refused") || a.Contains("rewrote")));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E4_TheHubRewritesHistory(int seed)
+    {
+        bool done = false;
+        var sim = BadHub(seed, (sm, h) =>
+        {
+            var hist = h.G.History;
+            if (done || hist.count < 5 || h.G.Flow.stage != GameFlow.STAGE_ORDERS) return;
+            hist.orders[1] = hist.orders[2]; hist.body[1] = hist.body[1].Replace(hist.body[1].Split('.')[0], "S1901M") == hist.body[1] ? hist.body[2] : hist.body[1];
+            hist.body[1] = hist.body[2];
+            h.G.Flow.phaseSerial++;
+            done = true;
+        });
+        Assert.True(sim.RunUntil(() => sim.Present.Count(d => d.Honest && d.Node.alarmCount > 0) == Map.powerCount - 1, 3600_000), "not every honest device alarmed");
+        foreach (var d in sim.Present.Where(d => d.Honest))
+        {
+            Assert.Contains(AlarmsOn(d), a => a.Contains("rewrote"));
+            Assert.NotEqual(sim.Hub.G.History.body[1], d.G.History.body[1]); // kept its own archive
+        }
+    }
+
+    // a modified client: changes the opening (fields 5-8) in its slot before sending it
+    private static VrSim BadOpener(int seed, string who, Func<VrSim.Device, string[], bool> change)
+    {
+        var sim = Table(seed, HandoverSettings());
+        var d = sim.Find(who); d.Honest = false;
+        d.OutFilter = (obj, text) =>
+        {
+            if (!obj.StartsWith(NetNode.SLOT)) return text;
+            var f = text.Split('\n');
+            if (f.Length != 12 || f[5] == "" || d.G.History.count < 3) return text;
+            return change(d, f) ? string.Join("\n", f) : text;
+        };
+        return sim;
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E5_APlayerOpensADifferentSheetThanTheySealed(int seed)
+    {
+        string who = Names[1 + seed % (Map.powerCount - 1)];
+        int cheats = 0;
+        var sim = BadOpener(seed, who, (d, f) =>
+        {
+            if (d.G.State.phase != BoardState.PHASE_MOVE) return false;
+            string other = d.Bot.Choose(d.Node.MyPower());
+            if (other == f[8]) return false;
+            f[8] = other; cheats++;
+            return true;
+        });
+        int p = sim.Hub.G.Flow.SeatOf(who);
+        Assert.True(sim.RunUntil(() => cheats >= 2 && sim.Hub.G.Flow.unopened[p] >= 1 && Phases(sim) > 6, 3600_000), "the changed sheet was used");
+        sim.RunFor(30_000);
+        Assert.True(sim.Hub.G.Flow.unopened[p] >= 1);
+        Done(sim, true);
+        foreach (var d in sim.Present.Where(d => d.Honest)) Assert.Empty(AlarmsOn(d));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E6_APlayerWithholdsTheirOpening(int seed)
+    {
+        string who = Names[1 + seed % (Map.powerCount - 1)];
+        var sim = BadOpener(seed, who, (d, f) => { f[5] = ""; f[6] = ""; f[7] = ""; f[8] = ""; return true; });
+        int p = sim.Hub.G.Flow.SeatOf(who);
+        Assert.True(sim.RunUntil(() => sim.Hub.G.Flow.stage == GameFlow.STAGE_REVEAL && Phases(sim) >= 3 && sim.Hub.G.Flow.sealText[p] != "", 3600_000));
+        long frozen = sim.Now; int c = Phases(sim);
+        Assert.True(sim.RunUntil(() => Phases(sim) > c, 60_000));
+        Assert.True(sim.Now - frozen <= 1000 * (20 + 3), "the others waited beyond the reveal window");
+        Assert.Equal(Announcement.S_UNOPENED, sim.Hub.G.Announce.powerStatus[p]);
+        Assert.True(sim.Hub.G.Flow.unopened[p] >= 1);
+        sim.RunFor(60_000);
+        Done(sim, true);
+        foreach (var d in sim.Present.Where(d => d.Honest)) Assert.Empty(AlarmsOn(d));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E7_AModifiedClientWritesIntoAnotherPlayersSlot(int seed)
+    {
+        string victim = Names[1 + seed % (Map.powerCount - 1)];
+        string attacker = Names[1 + (seed + 1) % (Map.powerCount - 1)];
+        var sim = Table(seed, HandoverSettings());
+        var a = sim.Find(attacker); a.Honest = false;
+        var v = sim.Find(victim);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 3 && sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS && sim.Hub.G.State.phase == BoardState.PHASE_MOVE, 3600_000));
+        // a forged seal for the victim, written into the victim's slot
+        var f = a.G.Flow; int p = f.SeatOf(victim);
+        string pid = a.Node.PhaseId();
+        string forged = a.G.Seal.Make(a.G.Seal.NextSalt(), p, f.SealKey(), "");
+        string slot = string.Join("\n", new[] { "PS1", a.G.History.EscapeName(victim), "-1", pid, forged, "", "", "", "", "", "0", "" });
+        int dropped = sim.DroppedNonOwnerWrites;
+        Assert.False(sim.Write(a, sim.SlotId(victim), slot));
+        Assert.Equal(dropped + 1, sim.DroppedNonOwnerWrites);
+        sim.RunFor(5_000);
+        Assert.NotEqual(forged, sim.Hub.G.Flow.sealText[p]);
+        // if VRChat let a modified client take the object, the victim's device notices at the freeze
+        foreach (var d in sim.Present) d.NeverSubmit = true;
+        Assert.True(sim.RunUntil(() => sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS && sim.Hub.G.State.phase == BoardState.PHASE_MOVE
+            && a.Node.PhaseId() == sim.Hub.Node.PhaseId() && sim.Hub.G.Flow.SecondsLeft(sim.Hub.Node.Now((int)sim.Now)) > 30, 3600_000));
+        foreach (var d in sim.Present) d.Node.SubmitOff();
+        sim.ForceOwner(sim.SlotId(victim), a);
+        sim.RunFor(1_000);
+        pid = a.Node.PhaseId();
+        forged = a.G.Seal.Make(a.G.Seal.NextSalt(), p, f.SealKey(), "");
+        slot = string.Join("\n", new[] { "PS1", a.G.History.EscapeName(victim), "-1", pid, forged, "", "", "", "", "", "0", "" });
+        Assert.True(sim.Write(a, sim.SlotId(victim), slot));
+        Assert.True(sim.RunUntil(() => v.Node.alarmCount > 0, 600_000), "the victim's device did not alarm");
+        Assert.Contains(AlarmsOn(v), x => x.Contains("never made"));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void E8_ASpectatorSpamsSeatClaimsAndReadyToggles(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        var spam = sim.Join("Hal");
+        spam.Honest = false; spam.Passive = true;
+        spam.Script = (sm, d) => { d.Node.RequestSeat(sm.Rng.Next(Map.powerCount)); d.Node.PressReady(!d.Node.myReady); };
+        sim.RunUntil(() => Phases(sim) >= 12, 3600_000);
+        Assert.True(Phases(sim) >= 12, "play was held up");
+        for (int p = 0; p < Map.powerCount; p++) Assert.Equal(Names[p], sim.Hub.G.History.seatName[p]);
+        Assert.True(spam.PeakBytesPerSecond <= sim.S.BudgetBytesPerSecond, "the spammer sent " + spam.PeakBytesPerSecond + " bytes a second");
         Done(sim);
     }
 }

@@ -109,7 +109,8 @@ namespace Parley.Engine
         public string openSheet = "";
         public string readyPhase = "";
         public bool myReady;
-        private bool slotDirty;
+        /// <summary>The slot must be written again (set by every change to it).</summary>
+        public bool slotDirty;
         private int lastSlotMs;
         private bool slotEverWritten;
 
@@ -143,6 +144,10 @@ namespace Parley.Engine
         /// <summary>Plain notices for the players ("X is now hosting", "your save failed").</summary>
         public string[] notices;
         public int noticeCount;
+        /// <summary>Alarms raised on other devices, as "name: text" (each device shares its latest in its slot).</summary>
+        public string[] heard;
+        public int heardCount;
+        private int firstStepMs = -1;
 
         // ---- hub side ----
         private int lastHubWriteMs;
@@ -177,6 +182,7 @@ namespace Parley.Engine
             outId = new string[MAX_OUT]; outText = new string[MAX_OUT]; outCount = 0;
             ownWant = new string[MAX_PAGES + 2]; ownWantCount = 0;
             alarms = new string[64]; alarmCount = 0; notices = new string[64]; noticeCount = 0;
+            heard = new string[64]; heardCount = 0;
             records = new string[KEEP_RECORDS]; recordCount = 0;
             saveName = new string[MAX_PLAYERS]; saveText = new string[MAX_PLAYERS]; saveCount = 0;
             slotDirty = true;
@@ -250,7 +256,15 @@ namespace Parley.Engine
                     s = slotCount; slotCount++; slotName[s] = name;
                 }
                 slotText[s] = text;
+                string[] f = text.Split('\n');
+                if (f.Length == 12 && f[11] != "") Hear(name + ": " + history.UnescapeName(f[11]));
             }
+        }
+
+        private void Hear(string text)
+        {
+            for (int i = 0; i < heardCount; i++) if (heard[i] == text) return;
+            if (heardCount < heard.Length) { heard[heardCount] = text; heardCount++; }
         }
 
         /// <summary>A player's PlayerData has loaded or changed ("" if they have no save).</summary>
@@ -365,6 +379,7 @@ namespace Parley.Engine
         public void Step(int nowMs)
         {
             stepMs = nowMs;
+            if (firstStepMs < 0) firstStepMs = nowMs;
             int second = nowMs / 1000;
             if (second != sentSecond) { sentSecond = second; sentBytes = 0; }
             if (isHub)
@@ -408,7 +423,23 @@ namespace Parley.Engine
             int st = flow.stage;
             bool timeUp = (st == GameFlow.STAGE_ORDERS && flow.deadline >= 0 && now >= flow.deadline) || st == GameFlow.STAGE_CLOSING;
             if (timeUp && flow.NeedsSeal(p) && !(sealPhase == pid && mySeal != "") && openPhase != pid) SubmitOn();
-            if (st == GameFlow.STAGE_REVEAL) CheckFrozen(p, pid, flow.sealText[p], true);
+            if (st == GameFlow.STAGE_REVEAL)
+            {
+                CheckFrozen(p, pid, flow.sealText[p], true);
+                CheckFairClose(p, pid);
+            }
+        }
+
+        // The phase closed without my seal although I was here and had to give one: the hub
+        // treated me as absent, or said everyone had submitted (E2). A close on time with my
+        // seal arriving too late is not this: my device seals at the deadline by itself.
+        private void CheckFairClose(int p, string pid)
+        {
+            if (p < 0 || flow.sealText[p] != "" || !flow.NeedsSeal(p) || alarmedPhase == pid) return;
+            if (stepMs - firstStepMs < 15000) return;
+            if (flow.closeReason != GameFlow.CLOSED_ALL_SUBMITTED && flow.seatPresent[p]) return;
+            alarmedPhase = pid;
+            Alarm(acceptedHub + " closed the phase while this device was still writing (" + map.powerName[p] + " was treated as absent)");
         }
 
         // My seat's frozen seal: open it if it is mine; alarm if it is a seal I never made.
@@ -480,7 +511,7 @@ namespace Parley.Engine
         private void ApplySlot(string name, string text, bool present)
         {
             string[] f = text.Split('\n');
-            if (f.Length != 11 || f[0] != "PS1" || history.UnescapeName(f[1]) != name) return;
+            if (f.Length != 12 || f[0] != "PS1" || history.UnescapeName(f[1]) != name) return;
             int req = map.ParseInt(f[2], -1);
             int p = flow.SeatOf(name);
             if (present && req >= 0 && req != p && flow.ClaimSeat(req, name)) p = req;
@@ -673,7 +704,11 @@ namespace Parley.Engine
                 return false;
             }
             int p = MyPower();
-            if (p >= 0) CheckFrozen(p, PhaseId(), flow.sealText[p], false);
+            if (p >= 0)
+            {
+                CheckFrozen(p, PhaseId(), flow.sealText[p], false);
+                if (flow.stage == GameFlow.STAGE_REVEAL || !flow.seatPresent[p]) CheckFairClose(p, PhaseId());
+            }
             int before = history.count;
             for (int k = 1; k <= 4 && history.count == before; k++) flow.ForceNext(t + 1000 * k);
             if (history.count != before + 1)
@@ -877,7 +912,8 @@ namespace Parley.Engine
         private string MySlot()
         {
             return "PS1\n" + history.EscapeName(me) + "\n" + seatReq.ToString() + "\n" + sealPhase + "\n" + mySeal + "\n" + openPhase + "\n" + openSeal
-                + "\n" + openSalt + "\n" + openSheet + "\n" + readyPhase + "\n" + (myReady ? "1" : "0");
+                + "\n" + openSalt + "\n" + openSheet + "\n" + readyPhase + "\n" + (myReady ? "1" : "0")
+                + "\n" + (alarmCount > 0 ? history.EscapeName(alarms[alarmCount - 1]) : "");
         }
 
         private string SeatsText()
@@ -971,6 +1007,7 @@ namespace Parley.Engine
         {
             for (int i = 0; i < alarmCount; i++) if (alarms[i] == text) return;
             if (alarmCount < alarms.Length) { alarms[alarmCount] = text; alarmCount++; }
+            slotDirty = true;
         }
 
         private void Notice(string text)
