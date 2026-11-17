@@ -69,7 +69,7 @@ public sealed class VrSim
         public long Time; public long Seq;
         public int Kind; // 0 deliver, 1 owner, 2 join, 3 leave, 4 playerdata, 5 save result
         public string Obj, Text, Name;
-        public bool Ok;
+        public bool Ok, Cancelled;
         public Device To; public int Inc;
         public (string, string, Device) Key; public bool HasKey;
     }
@@ -192,10 +192,25 @@ public sealed class VrSim
         return d;
     }
 
-    public void Leave(string name)
+    /// <summary>What happens to a leaving hub's last sends of the hub objects that are still on their way.</summary>
+    public const int IN_FLIGHT_ARRIVE = 0, IN_FLIGHT_LOST = 1, IN_FLIGHT_LATE = 2;
+
+    public void Leave(string name, int inFlight = IN_FLIGHT_ARRIVE, int lateMs = 4000)
     {
         var d = Find(name);
         if (d == null) return;
+        if (inFlight != IN_FLIGHT_ARRIVE)
+        {
+            var world = WorldObjects().ToHashSet();
+            foreach (var (e, _) in queue.UnorderedItems.ToList())
+            {
+                if (e.Cancelled || e.Kind != 0 || e.Name != name || !world.Contains(e.Obj)) continue;
+                e.Cancelled = true;
+                if (e.HasKey && pending.TryGetValue(e.Key, out var pe) && pe == e) pending.Remove(e.Key);
+                if (inFlight == IN_FLIGHT_LATE)
+                    Push(new Ev { Time = e.Time + lateMs, Kind = 0, Obj = e.Obj, Text = e.Text, Name = e.Name, To = e.To, Inc = e.Inc });
+            }
+        }
         d.Present = false;
         Present.Remove(d);
         latest.Remove(SlotId(name));
@@ -332,6 +347,7 @@ public sealed class VrSim
         while (queue.Count > 0 && queue.Peek().Time <= Now)
         {
             var e = queue.Dequeue();
+            if (e.Cancelled) continue;
             if (e.HasKey && pending.TryGetValue(e.Key, out var pe) && pe == e) pending.Remove(e.Key);
             if (!e.To.Present || e.To.Incarnation != e.Inc) continue;
             var n = e.To.Node;
@@ -450,7 +466,8 @@ public sealed class VrSim
                 }
             }
             int status = hub.G.Announce.powerStatus[p];
-            if (status == Announcement.S_NONE || status == Announcement.S_UNOPENED)
+            var seated = Present.FirstOrDefault(x => x.Name == h.seatName[p]);
+            if ((status == Announcement.S_NONE || status == Announcement.S_UNOPENED) && seated != null && Now - seated.JoinedAt > 30_000)
                 LostSheets.Add(h.count + " " + Map.powerName[p] + " " + status);
             if (sheet != "" && !rf.Submit(p, sheet)) Violation("reference refused " + Map.powerName[p] + "'s sheet: " + rf.error);
         }
@@ -490,6 +507,19 @@ public sealed class VrSim
     // Final checks and reports
     // =====================================================================
 
+    /// <summary>Runs until every honest present device holds the hub's archive (or the time runs out).</summary>
+    public bool Settle(long maxMs = 30_000)
+    {
+        return RunUntil(() =>
+        {
+            if (Now % 1000 >= S.StepMs) return false;
+            var hub = Hub;
+            if (hub == null || !hub.Node.isHub) return false;
+            string a = hub.G.Flow.Archive();
+            return Present.All(d => !d.Honest || d == hub || d.G.Flow.Archive() == a);
+        }, maxMs);
+    }
+
     /// <summary>Checks every honest present device holds the hub's archive, and nobody raised an alarm.</summary>
     public void CheckSettled(bool alarmsAllowed = false)
     {
@@ -497,7 +527,14 @@ public sealed class VrSim
         if (hub == null) { Violation("nobody is hub"); return; }
         string a = hub.G.Flow.Archive();
         foreach (var d in Present)
-            if (d.Honest && d != hub && d.G.Flow.Archive() != a) Violation("agreement: " + d.Name + "'s archive differs from the hub's at the end");
+            if (d.Honest && d != hub && d.G.Flow.Archive() != a)
+            {
+                var x = a.Split(';'); var y = d.G.Flow.Archive().Split(';');
+                int i = 0;
+                while (i < x.Length && i < y.Length && x[i] == y[i]) i++;
+                Violation("agreement: " + d.Name + "'s archive differs from the hub's at the end, entry " + i + " of " + x.Length + "/" + y.Length
+                    + ": hub " + (i < x.Length ? x[i] : "-") + " / " + d.Name + " " + (i < y.Length ? y[i] : "-"));
+            }
         if (!alarmsAllowed)
             foreach (var d in Devices)
                 for (int i = 0; i < d.Node.alarmCount; i++) Violation("alarm in an honest run on " + d.Name + ": " + d.Node.alarms[i]);

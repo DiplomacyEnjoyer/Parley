@@ -40,6 +40,8 @@ namespace Parley.Engine
         public const int KEEP_SEALS = 4;
         public const int KEEP_RECORDS = 3;
         public const int MAX_OUT = 48;
+        /// <summary>How long a device waits for the hub's record of a phase before catching up from the pages unchecked.</summary>
+        public const int RECORD_WAIT_MS = 8000;
 
         public GameFlow flow;
         public OrderSeal seal;
@@ -93,6 +95,9 @@ namespace Parley.Engine
         private bool followDirty;
         private string lastLoaded = "";
         private int stuckEpoch = -1;
+        private int stepMs;
+        private int waitFor = -1;
+        private int waitStartMs;
 
         // ---- my slot ----
         public int seatReq = -1;
@@ -198,8 +203,7 @@ namespace Parley.Engine
                 for (int k = i + 1; k < playerCount; k++) players[k - 1] = players[k];
                 playerCount--;
             }
-            int s = FindSlot(name);
-            if (s >= 0) slotText[s] = "";
+            // the slot copy is kept: a sheet its player opened before leaving still counts
             if (isHub) flow.PlayerLeft(name);
         }
 
@@ -213,7 +217,12 @@ namespace Parley.Engine
             {
                 bool mine = ownerName == me;
                 if (mine && !isHub) BecomeHub();
-                else if (!mine && isHub) { isHub = false; Notice(ownerName + " is now hosting"); }
+                else if (!mine && isHub)
+                {
+                    // what I received before I was hub is older than my own state: follow only what the new hub sends
+                    isHub = false; hubText = ""; hubLive = ""; followDirty = false; lastLoaded = "";
+                    Notice(ownerName + " is now hosting");
+                }
             }
             else if (ownerName == me && isHub)
             {
@@ -355,6 +364,7 @@ namespace Parley.Engine
 
         public void Step(int nowMs)
         {
+            stepMs = nowMs;
             int second = nowMs / 1000;
             if (second != sentSecond) { sentSecond = second; sentBytes = 0; }
             if (isHub)
@@ -461,25 +471,29 @@ namespace Parley.Engine
         // Applies what the players' slots say. State-based, so a new hub simply re-reads them.
         private void ReadSlots()
         {
-            for (int i = 0; i < playerCount; i++)
-            {
-                string t = players[i] == me ? MySlot() : SlotOf(players[i]);
-                if (t != "") ApplySlot(players[i], t);
-            }
+            ApplySlot(me, MySlot(), true);
+            for (int i = 0; i < slotCount; i++)
+                if (slotText[i] != "") ApplySlot(slotName[i], slotText[i], FindPlayer(slotName[i]) >= 0);
         }
 
-        private void ApplySlot(string name, string text)
+        // A player who has left counts only with a sheet they opened before leaving.
+        private void ApplySlot(string name, string text, bool present)
         {
             string[] f = text.Split('\n');
             if (f.Length != 11 || f[0] != "PS1" || history.UnescapeName(f[1]) != name) return;
             int req = map.ParseInt(f[2], -1);
             int p = flow.SeatOf(name);
-            if (req >= 0 && req != p && (flow.stage == GameFlow.STAGE_LOBBY || req < map.powerCount) && flow.ClaimSeat(req, name)) p = req;
+            if (present && req >= 0 && req != p && flow.ClaimSeat(req, name)) p = req;
             if (p < 0) return;
             string pid = PhaseId();
             string sPhase = f[3]; string sSeal = f[4];
             string oPhase = f[5]; string oSeal = f[6]; string oSalt = f[7]; string oSheet = f[8];
             int st = flow.stage;
+            if (!present)
+            {
+                if (st == GameFlow.STAGE_REVEAL && !flow.opened[p] && oPhase == pid && oSeal != "" && oSeal == flow.sealText[p]) flow.Open(p, oSalt, oSheet);
+                return;
+            }
             // a sheet already opened under an earlier hub pins the seal it opened
             string want = "";
             bool known = false;
@@ -564,6 +578,7 @@ namespace Parley.Engine
 
         private void Follow()
         {
+            if (hubText == "") return;
             string[] lf = hubLive.Split('|');
             if (lf.Length < 8) return;
             string line = lf[1];
@@ -577,7 +592,13 @@ namespace Parley.Engine
             {
                 guard++;
                 string rec = FindRecord(history.count, flow.timeline);
-                if (rec == "") break;
+                if (rec == "")
+                {
+                    // the record travels in another object and may come a little later than the hub state
+                    if (waitFor != history.count) { waitFor = history.count; waitStartMs = stepMs; }
+                    if (stepMs - waitStartMs < RECORD_WAIT_MS) { followDirty = true; return; }
+                    break;
+                }
                 if (!VerifyRecord(rec)) { stuckEpoch = hubEpoch; return; }
             }
 

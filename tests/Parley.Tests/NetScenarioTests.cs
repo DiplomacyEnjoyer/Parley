@@ -43,6 +43,7 @@ public class NetScenarioTests
 
     private void Done(VrSim sim, bool alarmsAllowed = false)
     {
+        sim.Settle();
         sim.CheckSettled(alarmsAllowed);
         output.WriteLine(sim.Report());
         Assert.True(sim.Violations.Count == 0, sim.Report() + "\n" + string.Join("\n", sim.Log.TakeLast(30)));
@@ -168,10 +169,7 @@ public class NetScenarioTests
         sim.RunFor(5_000);
         foreach (var d in sim.Present) Assert.Equal(GameFlow.STAGE_ORDERS, d.G.Flow.stage);
         // and a slow (but not absent) player is waited for
-        gus.NeverReady = false;
-        gus.Script = null;
         Assert.True(sim.RunUntil(() => sim.Hub.G.Flow.stage == GameFlow.STAGE_READY, 3600_000));
-        gus.NeverReady = true;
         sim.RunFor(20_000);
         Assert.Equal(GameFlow.STAGE_READY, sim.Hub.G.Flow.stage);
         gus.NeverReady = false;
@@ -200,5 +198,131 @@ public class NetScenarioTests
             Assert.InRange(d.G.Flow.SecondsLeft(d.Node.Now((int)sim.Now)), hubLeft - 1, hubLeft + 1);
         }
         Done(sim);
+    }
+
+    // ------------------------------------------------------------------ C. the hub leaving
+
+    private static VrSim.Settings HandoverSettings() => new VrSim.Settings { MoveSeconds = 90, RetreatSeconds = 30, AdjustSeconds = 30, MaxDelayMs = 800 };
+
+    /// <summary>Plays on after the hub left and checks the game went on under the new master.</summary>
+    private void AfterHandover(VrSim sim, string oldHub, int phasesMore = 6)
+    {
+        Assert.True(sim.RunUntil(() => sim.Hub != null && sim.Hub.Node.isHub, 10_000), "nobody took over");
+        Assert.NotEqual(oldHub, sim.Hub.Name);
+        int c = Phases(sim);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + phasesMore, 3600_000), "the game did not go on after the handover");
+        sim.RunFor(20_000);
+        Done(sim);
+        Assert.Empty(sim.LostSheets);
+        // no phase was resolved twice into the archive
+        var labels = VrSim.Bodies(sim.Hub.G.Flow.Archive()).Select(b => b.Split('.')[0]).ToList();
+        Assert.Equal(labels.Count, labels.Distinct().Count());
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C1_HubLeavesWhileTheClockRuns(int seed)
+    {
+        var s = HandoverSettings(); s.SubmitMinMs = 20_000; s.SubmitMaxMs = 70_000;
+        var sim = Table(seed, s);
+        Assert.True(sim.RunUntil(() => sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS && sim.Hub.G.State.phase == BoardState.PHASE_MOVE, 600_000));
+        sim.RunFor(25_000 + sim.Rng.Next(10_000));
+        var old = sim.Hub; var f = old.G.Flow;
+        Assert.Equal(GameFlow.STAGE_ORDERS, f.stage);
+        float deadline = f.deadline;
+        var seals = (string[])f.sealText.Clone();
+        sim.Leave(old.Name);
+        Assert.True(sim.RunUntil(() => sim.Hub != null && sim.Hub.Node.isHub && sim.Hub.Node.hubEpoch > 0, 5_000), "the new master did not take over within seconds");
+        var nf = sim.Hub.G.Flow;
+        if (nf.stage == GameFlow.STAGE_ORDERS) Assert.InRange(nf.deadline, deadline - 0.5f, deadline + 0.5f);
+        for (int p = 0; p < Map.powerCount; p++)
+        {
+            var holder = sim.Find(nf.history.seatName[p]);
+            if (seals[p] == "" || holder == null || nf.stage != GameFlow.STAGE_ORDERS) continue;
+            Assert.True(nf.sealText[p] == seals[p] || nf.sealText[p] == holder.Node.mySeal, "a seal was lost with the hub");
+        }
+        AfterHandover(sim, old.Name);
+    }
+
+    private void LeaveInStage(int seed, int stage, int inFlight = VrSim.IN_FLIGHT_ARRIVE)
+    {
+        var s = HandoverSettings();
+        var sim = Table(seed, s);
+        foreach (var d in sim.Present) d.NeverSubmit = true; // so that the clock runs out and the phase closes
+        Assert.True(sim.RunUntil(() => sim.Hub.G.Flow.stage == stage && sim.Hub.G.History.count > 1, 3600_000), "stage " + stage + " never came");
+        var old = sim.Hub;
+        sim.Leave(old.Name, inFlight);
+        foreach (var d in sim.Present) d.NeverSubmit = false;
+        AfterHandover(sim, old.Name);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C2_HubLeavesDuringClosing(int seed) => LeaveInStage(seed, GameFlow.STAGE_CLOSING);
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C3_HubLeavesDuringTheReveal(int seed) => LeaveInStage(seed, GameFlow.STAGE_REVEAL);
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C5_HubLeavesDuringTheAnnouncement(int seed) => LeaveInStage(seed, GameFlow.STAGE_ANNOUNCE);
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C4_HubLeavesRightAfterResolvingAndNobodyGotTheResult(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        Assert.True(sim.RunUntil(() => sim.Hub.G.History.count >= 3 && sim.Hub.G.Flow.stage == GameFlow.STAGE_REVEAL, 3600_000));
+        var old = sim.Hub; int c = old.G.History.count;
+        Assert.True(sim.RunUntil(() => old.G.History.count > c, 120_000), "the hub did not resolve");
+        string lost = old.G.History.CodeAt(c);
+        sim.Leave(old.Name, VrSim.IN_FLIGHT_LOST);
+        Assert.True(sim.RunUntil(() => sim.Hub != null && sim.Hub.Node.isHub && sim.Hub.G.History.count > c, 120_000), "the new hub did not resolve the phase again");
+        Assert.Equal(lost, sim.Hub.G.History.CodeAt(c));
+        AfterHandover(sim, old.Name);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C6_TwoHubsInARowLeaveWithinTenSeconds(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        Assert.True(sim.RunUntil(() => sim.Hub.G.History.count >= 2 + seed % 3, 3600_000));
+        var first = sim.Hub.Name;
+        sim.Leave(first);
+        sim.RunFor(1_000 + sim.Rng.Next(8_000));
+        var second = sim.Present[0].Name;
+        sim.Leave(second);
+        AfterHandover(sim, second);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C7_ASlowNewMasterThenHostHere(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        sim.Find("Bo").ExtraDelayMs = 2500; // the next master is on weak Wi-Fi
+        Assert.True(sim.RunUntil(() => sim.Hub.G.History.count >= 3, 3600_000));
+        sim.Leave("Ada");
+        Assert.True(sim.RunUntil(() => sim.Hub != null && sim.Hub.Name == "Bo" && sim.Hub.Node.isHub, 10_000));
+        int c = Phases(sim);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + 3, 3600_000), "the slow hub did not keep the game going");
+        sim.RunFor(sim.Rng.Next(60_000));
+        sim.Find("Cy").Node.HostHere();
+        Assert.True(sim.RunUntil(() => sim.Hub != null && sim.Hub.Name == "Cy" && sim.Hub.Node.isHub, 10_000), "host here did not move the hub");
+        AfterHandover(sim, "Bo");
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void C8_TheOldHubsLastSendArrivesAfterTheHandover(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        Assert.True(sim.RunUntil(() => sim.Hub.G.History.count >= 2 + seed % 4, 3600_000));
+        sim.RunFor(sim.Rng.Next(20_000));
+        var old = sim.Hub.Name;
+        sim.Leave(old, VrSim.IN_FLIGHT_LATE);
+        AfterHandover(sim, old);
     }
 }
