@@ -814,3 +814,66 @@ Design only, for the Unity phase: `docs/vrchat-sync-design.md`. The decisions in
 
 Everything about VRChat's own behaviour in that document is from memory of its
 documentation (the sites were unreachable) and is listed there as "to verify".
+
+## 29. VR networking as built and tested in a simulated VRChat
+
+`engine/Parley.Engine/NetNode.cs` is the world's networking, in the engine subset, with
+no VRChat calls; `tools/Parley.Tools/VrSim.cs` simulates VRChat; the scenarios of
+`docs/vr-network-scenarios.md` are `tests/Parley.Tests/NetScenarioTests.cs`. Building it
+changed or settled these points of `docs/vrchat-sync-design.md`:
+
+- **One synced string per object.** `hub` (who hosts, hub epoch, session start, seats,
+  archive length and checksum, live state), `hubrec` (the last three resolutions),
+  `page0`..`page31` (the archive in 2,000-character pieces), and one `slot:NAME` per
+  player. The Unity adapter only copies strings in and out; it decides nothing.
+- **Hub epochs.** Each new hub writes the previous epoch plus one; every device ignores a
+  hub text older than one it has accepted. A send from a hub that has just been
+  replaced can arrive late (C8) and is then ignored. If two devices take over at once
+  with the same epoch, the one VRChat names as owner wins.
+- **Every device re-resolves every phase.** The hub publishes, for each resolution, its
+  live state and seats from just before resolving (`hubrec`). Each device loads that,
+  re-opens every sheet against its seal, resolves, and compares the archive's length and
+  checksum with the hub's. A device that missed more than three resolutions (away, or
+  just arrived) catches up from the pages without checking those phases. It waits up to
+  eight seconds for the record before doing that, because the record and the hub state
+  travel in different objects.
+- **Canonical board.** After each resolution every device decodes its board from the
+  newest archived position. The engine lists units in the order it created them, and the
+  order text in the archive follows that order, so a hub that started the game and a
+  device that loaded it wrote the same orders in a different order. Found by the first
+  simulated game.
+- **Sending budget.** The hub writes its state at most once a second; archive pages and
+  records wait for the next second when this device has sent 9,000 bytes in the current
+  one (text counted at two bytes a character). 8,000-character pages broke the
+  ~11 KB/s budget by themselves. Measured peak in whole seven-player games: about 9 KB/s.
+- **A sheet opened by a player who then left still counts.** The hub keeps the last
+  copy of a departed player's slot and uses an opening in it. Without this, a hub that
+  left mid-reveal would lose its own already-published sheet on the new hub.
+- **The new hub re-resolves from the slots (C4).** If the old hub resolved and nobody
+  received the result, the new hub resolves again from the openings in the slots, with
+  the same result. If some devices did receive the old result and the new hub's differs
+  in that last phase (possible only when a late opening reached the new hub but not the
+  old one), they accept the new hub's result with the notice "the new host resolved the
+  last phase again". A difference deeper than one phase is an alarm.
+- **Ready during the announcement.** A device that caught up mid-announcement skips the
+  reading and shows Ready early; a Ready pressed then counts. Harmless.
+- **Saves and resume.** After each phase every seated device writes the archive into its
+  player's PlayerData. Next session `ComputeOffers` groups the saves of the players
+  present: one archive beginning the other means the same game and the longer wins; a
+  conflicting save (edited, or another game) is its own offer, behind the offers more
+  players hold. The host loads an offer (`HostLoad`), which comes back paused.
+
+**Known limits, accepted for now (what players see):**
+
+- *A player absent during a roll-back keeps the discarded future in their save.* At the
+  next session that save extends the rolled-back line, so it would be offered as the
+  newer game. Players see the old future offered first. Fix later by storing the run name
+  (`GameFlow.timeline`) with the save and preferring the run most present players hold.
+- *A seal frozen while its player was away is never opened* (B3, and B4 when the
+  player leaves for good after sealing): their units hold and the announcement says
+  "never opened". This is the accepted weakness of §28.
+- *Clock:* times are float seconds since the session start that the first hub
+  publishes; VRChat's millisecond server time wraps after about 24 days, which a single
+  session never reaches.
+- *Not yet modelled:* adversaries (E) and the explicit limit runs (F) of the spec, except
+  that every run measures peak bytes per second, largest send and largest save.

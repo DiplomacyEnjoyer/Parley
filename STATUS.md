@@ -6,26 +6,51 @@ and what is left is listed below. Everything is committed and on `main`.*
 
 ## Handoff (latest; read before anything else)
 
-*Written at the end of the last Fable session. The owner's goal now: a **minimum VR world
-for the classic board**, so friends can playtest in VRChat. Not more rulesets or variants.*
+*Updated at the end of the networking session (step 1 of the plan below). The owner's
+goal: a **minimum VR world for the classic board**, so friends can playtest in VRChat.*
 
-**State:** `main` builds; 354 tests pass. Rules engine proven (DATC 165/165; Python
-engine and godip agree on whole games). The web client plays the full turn flow.
-Nothing exists in Unity yet.
+**State:** `main` builds; all tests pass (`dotnet test`; the scenario tests need
+`./scripts/fetch-reference-maps.sh` once for the classic board, else they fall back to
+`ring7`). Rules engine proven (DATC 165/165; Python engine and godip agree). The web
+client plays the full turn flow. Nothing exists in Unity yet.
 
-**Biggest risk:** the VR networking (sealed orders across headsets, host handover, late
-joiners, saves in PlayerData). It is a design only: `docs/vrchat-sync-design.md`.
+**Step 1 is largely done: networking + simulated VRChat.**
 
-**Next steps, in order, with the model each needs:**
+- `engine/Parley.Engine/NetNode.cs`: one headset's networking, engine subset (checked by
+  `UdonSubsetTests`), no VRChat calls. Inputs: `Step(serverMs)`, `OnReceive(object, text)`,
+  `OnOwner`, `OnPlayerJoined/Left`, `OnPlayerData`, `OnSaveResult`, local actions
+  (`SetSheet`, `SubmitOn/Off`, `PressReady`, `RequestSeat`, `HostStart/Pause/Resume/
+  ForceNext/Load/RollBack`, `HostHere`). Outputs: `outId/outText` (objects to write),
+  `ownWant` (ownership requests), `saveOut` (PlayerData), `alarms`, `notices`,
+  `ComputeOffers` (resume offers).
+- `tools/Parley.Tools/VrSim.cs`: the simulated VRChat ("harness") with the invariants of
+  the spec checked continuously (agreement, engine truth, secrecy spy, liveness, no
+  silent loss, saves, alarms).
+- `tests/Parley.Tests/NetScenarioTests.cs`: scenarios **A1-A7, B1-B7 (B6 inside D1),
+  C1-C8, D1-D8 all pass**, 3 seeds each by default; `PARLEY_NET_SEEDS=20 dotnet test
+  --filter NetScenario` runs more (passed with 12 seeds, 20 for D8). The spec's bar is
+  200 seeds (50 whole games for A1/B5): not yet run at that size.
+- Design changes and accepted limits: **DECISIONS §29** (read it).
+- Measured: peak ~9 KB/s per device (budget ~11 KB/s), largest send ~5.4 KB (`hubrec`),
+  save ~19 KB after 12 game years.
 
-1. **Networking layer + simulated VRChat** (Opus, high effort, a session to itself).
-   Spec and acceptance tests: `docs/vr-network-scenarios.md`. Engine-subset C#, tested
-   in .NET against a fake VRChat. Then a separate Opus session reviews it (`/code-review`).
-2. **Unity-side scene scripts** for the minimum world (Sonnet): flat board, list-based
-   order sheet with big tap targets, submit toggle, Ready, clock, announcement as text.
-   See `docs/vr-world-design.md` §4 for hand-tracking limits.
-3. **`docs/unity-setup.md`** (Sonnet): step-by-step install, import, scene, two-headset
-   test for the owner.
+**Left of step 1:** section E (adversaries: hub forging a seal, closing early, wrong
+result, rewritten history; player opening a different sheet, withholding, writing into
+another's slot, spamming) and F (explicit limit runs and a full-size late-joiner
+download). Several E checks already exist in the node (forged seal for my seat, result
+differs, history rewritten, refused live state); what is missing is the harness's bad
+devices, the "closed while I was still writing" check (E2), and sharing alarms in the
+slots so everyone sees them. Then a separate Opus session reviews the networking
+(`/code-review`).
+
+**Next steps after that, in order, with the model each needs:**
+
+2. **Unity-side scene scripts** for the minimum world (Sonnet): a dumb adapter that feeds
+   `NetNode` from VRChat (one synced string per object, see DECISIONS §29), flat board,
+   list-based order sheet with big tap targets, submit toggle, Ready, clock,
+   announcement as text. See `docs/vr-world-design.md` §4 for hand-tracking limits.
+3. **`docs/unity-setup.md`** exists (added by another session); check it against the
+   adapter once written.
 4. **Owner, on their own computer:** open in Unity, compile, fix errors with a Sonnet
    session (escalate a stuck Udon problem to Opus); measure speed on a Quest; check the
    table at the end of `docs/vrchat-sync-design.md`.
