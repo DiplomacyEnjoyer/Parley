@@ -655,4 +655,64 @@ public class NetScenarioTests
         Assert.Empty(sim.AllAlarms());
         Assert.Empty(sim.Violations);
     }
+
+    // ------------------------------------------------------------------ F. limits
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void F1_F2_BandwidthAndLargestSendInTheWorstCasePhase(int seed)
+    {
+        // everybody submits at the same moment, so all seals, then all openings, arrive together
+        var s = new VrSim.Settings { SubmitMinMs = 3000, SubmitMaxMs = 3000, ThinkMinMs = 1000, ThinkMaxMs = 1000 };
+        var sim = Table(seed, s);
+        sim.RunUntil(() => Phases(sim) >= 20, 3600_000);
+        Done(sim);
+        output.WriteLine("F1 peak bytes per second on any device: " + sim.PeakBytesPerSecond + " (budget " + s.BudgetBytesPerSecond + ")");
+        output.WriteLine("F2 largest single send: " + sim.LargestSendBytes + " bytes (" + sim.LargestSendObj + "), limit " + s.ObjectLimitBytes);
+        Assert.Equal(0, sim.OverBudgetSeconds);
+        Assert.True(sim.PeakBytesPerSecond <= s.BudgetBytesPerSecond);
+        Assert.True(sim.LargestSendBytes < s.ObjectLimitBytes);
+    }
+
+    /// <summary>A long game played by the engine alone (no network), for a full-size archive.</summary>
+    private static string LongArchive(int seed, int chars)
+    {
+        var g = Game.FromMap(Map);
+        g.Flow.SetTimers(0, 0, 0);
+        g.Flow.maxArchiveChars = 40_000;
+        for (int p = 0; p < Map.powerCount; p++) g.Flow.ClaimSeat(p, Names[p]);
+        g.Flow.StartGame(0);
+        var bot = new Bot(g, new Random(seed), false);
+        for (int i = 0; i < 2000 && g.Flow.Archive().Length < chars && g.Flow.stage != GameFlow.STAGE_FINISHED; i++)
+        {
+            for (int p = 0; p < Map.powerCount; p++) if (g.Flow.NeedsOrders(p)) g.Flow.Submit(p, bot.Choose(p));
+            g.Flow.ForceNext(i);
+        }
+        return g.Flow.Archive();
+    }
+
+    [Theory]
+    [MemberData(nameof(OneSeed))]
+    public void F3_AFullSizeArchiveReachesEveryoneAndALateJoiner(int seed)
+    {
+        string archive = LongArchive(seed, 36_000);
+        Assert.True(archive.Length >= 30_000, "the long game is only " + archive.Length + " characters");
+        var sim = Table(seed);
+        sim.RunFor(5_000);
+        long t0 = sim.Now;
+        Assert.True(sim.Hub.Node.HostLoad(archive, (int)sim.Now), sim.Hub.G.Flow.error);
+        Assert.True(sim.Settle(120_000), "the archive did not reach everyone");
+        double spread = (sim.Now - t0) / 1000.0;
+        var late = sim.Join("Hal");
+        long t1 = sim.Now;
+        Assert.True(sim.RunUntil(() => late.G.Flow.Archive() == sim.Hub.G.Flow.Archive(), 60_000), "the late joiner did not get the archive");
+        double join = (sim.Now - t1) / 1000.0;
+        output.WriteLine("F3 archive of " + archive.Length + " characters (" + 2 * archive.Length + " bytes): published to everyone in " + spread
+            + " s at the hub's budget; a late joiner had it after " + join + " s (VRChat's own late-join delivery; at the ~11 KB/s budget it would take about "
+            + Math.Round(2.0 * archive.Length / sim.S.BudgetBytesPerSecond, 1) + " s)");
+        sim.Hub.Node.HostResume((int)sim.Now);
+        int c = Phases(sim);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + 2 || Finished(sim), 3600_000));
+        Done(sim);
+    }
 }
