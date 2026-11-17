@@ -24,7 +24,11 @@ public sealed class VrSim
         public double CoalesceChance = 0.5;
         public int StaleWindowMs = 2000;
         public int ObjectLimitBytes = 280_000;     // per send (remembered value; to be confirmed)
-        public int BudgetBytesPerSecond = 11_000;  // per device (remembered value; to be confirmed)
+        // per device: VRChat documents about 11 KB/s, players report throttling at 4-6 KB/s,
+        // so the harness holds the world to 4 KB/s, averaged over 5 seconds
+        public int BudgetBytesPerSecond = 4_000;
+        public double LateJoinDropChance = 0.3;    // a late joiner misses an object's current value (open VRChat bug)
+        public double OwnerEventChance = 0.7;      // OnOwnershipTransferred sometimes does not fire
         public int PlayerDataLimitBytes = 100_000;
         public int PlayerDataMinDelayMs = 500, PlayerDataMaxDelayMs = 4000;
         public double SaveFailChance = 0;
@@ -63,6 +67,8 @@ public sealed class VrSim
         public Func<string, string, string> OutFilter;
         // counters
         public long BytesThisSecond; public long Second = -1; public long PeakBytesPerSecond;
+        public long[] Ring = new long[5]; public long PeakAverage;
+        public Dictionary<string, string> LocalOwner = new();
         public long MismatchSince = -1;
         public bool ReportedLag;
     }
@@ -70,7 +76,8 @@ public sealed class VrSim
     private sealed class Ev
     {
         public long Time; public long Seq;
-        public int Kind; // 0 deliver, 1 owner, 2 join, 3 leave, 4 playerdata, 5 save result
+        public int Kind; // 0 deliver, 1 owner, 2 join, 3 leave, 4 playerdata, 5 save result, 6 transfer acknowledged
+        public Device From;
         public string Obj, Text, Name;
         public bool Ok, Cancelled;
         public Device To; public int Inc;
@@ -90,6 +97,8 @@ public sealed class VrSim
     public long LargestSendBytes; public string LargestSendObj = "";
     public long LargestSaveBytes;
     public long PeakBytesPerSecond;
+    /// <summary>Highest 5-second average of bytes sent per second by any device.</summary>
+    public long PeakAverage;
     public int OverBudgetSeconds;
     public int DroppedNonOwnerWrites, RefusedOversize, FailedSaves;
     public int Resolutions;
@@ -185,6 +194,7 @@ public sealed class VrSim
         foreach (var kv in ownerOf) Push(new Ev { Time = t, Kind = 1, Obj = kv.Key, Name = kv.Value, To = d, Inc = d.Incarnation });
         foreach (var kv in latest)
         {
+            if (!first && Rng.NextDouble() < S.LateJoinDropChance) continue;
             var key = (kv.Key, kv.Value.from, d);
             var e = new Ev { Time = t, Kind = 0, Obj = kv.Key, Text = kv.Value.text, Name = kv.Value.from, To = d, Inc = d.Incarnation, Key = key, HasKey = true };
             lastSched[key] = t;
@@ -317,11 +327,19 @@ public sealed class VrSim
     private void Count(Device d, long bytes)
     {
         long sec = Now / 1000;
-        if (sec != d.Second) { d.Second = sec; d.BytesThisSecond = 0; }
+        if (sec != d.Second)
+        {
+            for (long k = Math.Max(d.Second + 1, sec - 4); k <= sec; k++) d.Ring[k % 5] = 0;
+            d.Second = sec; d.BytesThisSecond = 0;
+        }
+        d.Ring[sec % 5] += bytes;
+        long avg = d.Ring.Sum() / 5;
+        if (avg > d.PeakAverage) d.PeakAverage = avg;
+        if (avg > PeakAverage) PeakAverage = avg;
         d.BytesThisSecond += bytes;
         if (d.BytesThisSecond > d.PeakBytesPerSecond) d.PeakBytesPerSecond = d.BytesThisSecond;
         if (d.BytesThisSecond > PeakBytesPerSecond) PeakBytesPerSecond = d.BytesThisSecond;
-        if (d.BytesThisSecond > S.BudgetBytesPerSecond && d.BytesThisSecond - bytes <= S.BudgetBytesPerSecond) OverBudgetSeconds++;
+        if (avg > S.BudgetBytesPerSecond && avg - bytes / 5 <= S.BudgetBytesPerSecond) OverBudgetSeconds++;
     }
 
     private void Spy(Device from, string where, string text)
@@ -371,11 +389,15 @@ public sealed class VrSim
             switch (e.Kind)
             {
                 case 0: n.OnReceive(e.Obj, e.Text); break;
-                case 1: n.OnOwner(e.Obj, e.Name); break;
+                case 1:
+                    e.To.LocalOwner[e.Obj] = e.Name;
+                    if (Rng.NextDouble() < S.OwnerEventChance) n.OnOwner(e.Obj, e.Name);
+                    break;
                 case 2: n.OnPlayerJoined(e.Name); break;
                 case 3: n.OnPlayerLeft(e.Name); break;
                 case 4: n.OnPlayerData(e.Name, e.Text); break;
                 case 5: n.OnSaveResult(e.Ok); break;
+                case 6: if (ownerOf.ContainsKey(e.Obj)) Transfer(e.Obj, e.To); break;
             }
         }
         foreach (var d in Present.ToList())
@@ -384,6 +406,7 @@ public sealed class VrSim
             Play(d);
             d.Script?.Invoke(this, d);
             if (!d.Present) continue;
+            foreach (var kv in d.LocalOwner) d.Node.OnOwner(kv.Key, kv.Value); // Networking.GetOwner, every tick
             int beforeCount = d.G.History.count; string beforeLine = d.G.Flow.timeline; string beforePid = d.Node.PhaseId();
             d.Node.Step((int)Now);
             Observe(d, beforeCount, beforeLine, beforePid);
@@ -433,7 +456,8 @@ public sealed class VrSim
         for (int i = 0; i < n.ownWantCount; i++)
         {
             string obj = n.ownWant[i];
-            if (OwnerOf(obj) != d.Name && ownerOf.ContainsKey(obj)) Transfer(obj, d);
+            if (OwnerOf(obj) != d.Name && ownerOf.ContainsKey(obj))
+                Push(new Ev { Time = Now + Delay(d), Kind = 6, Obj = obj, To = d, Inc = d.Incarnation });
         }
         n.ownWantCount = 0;
         if (n.saveOut != "") { SavePlayerData(d, n.saveOut); n.saveOut = ""; }
@@ -596,7 +620,7 @@ public sealed class VrSim
     public string Report()
     {
         return "seed " + Seed + ": " + Resolutions + " resolutions, " + (Now - 1_000_000) / 1000 + " s simulated; peak " + PeakBytesPerSecond
-            + " B/s (budget " + S.BudgetBytesPerSecond + ", over in " + OverBudgetSeconds + " s); largest send " + LargestSendBytes + " B (" + LargestSendObj
+            + " B in one second, " + PeakAverage + " B/s over 5 s (budget " + S.BudgetBytesPerSecond + ", over " + OverBudgetSeconds + " times); largest send " + LargestSendBytes + " B (" + LargestSendObj
             + "); largest save " + LargestSaveBytes + " B; dropped non-owner writes " + DroppedNonOwnerWrites
             + (Violations.Count > 0 ? "\n" + string.Join("\n", Violations.Take(20)) : "");
     }

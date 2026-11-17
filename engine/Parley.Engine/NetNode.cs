@@ -35,11 +35,11 @@ namespace Parley.Engine
         public const string PAGE = "page";
         public const string SLOT = "slot:";
         public const int MAX_PLAYERS = 40;
-        public const int MAX_PAGES = 32;
-        public const int PAGE_CHARS = 2000;
+        public const int MAX_PAGES = 64;
+        public const int PAGE_CHARS = 1000;
         public const int KEEP_SEALS = 4;
         public const int KEEP_RECORDS = 3;
-        public const int MAX_OUT = 48;
+        public const int MAX_OUT = 80;
         /// <summary>How long a device waits for the hub's record of a phase before catching up from the pages unchecked.</summary>
         public const int RECORD_WAIT_MS = 8000;
 
@@ -56,11 +56,18 @@ namespace Parley.Engine
         /// <summary>The hub's shortest gap between two writes of "hub", in seconds.</summary>
         public float hubWriteSeconds = 1;
         /// <summary>
-        /// This device's own sending budget, in bytes a second (text counted at two bytes a
-        /// character). Archive pages and records wait for the next second when the budget
-        /// is spent; the hub state and the player's slot always go.
+        /// This device's own sending budget, in bytes a second on average (text counted at
+        /// two bytes a character), with bursts up to <see cref="burstSeconds"/> of it. The
+        /// hub state waits for the budget (up to the heartbeat); records and archive pages
+        /// come after it; the player's slot always goes.
         /// </summary>
-        public int sendBudgetBytes = 9000;
+        public int sendBudgetBytes = 3600;
+        public float burstSeconds = 1.5f;
+        /// <summary>
+        /// Late joiners do not reliably receive synced values on joining, so the hub resends
+        /// one archive page and its records, and every device its slot, this often.
+        /// </summary>
+        public float resendSeconds = 30;
         /// <summary>The hub rewrites "hub" at least this often even when nothing changed.</summary>
         public float heartbeatSeconds = 10;
         /// <summary>A player's shortest gap between two writes of their slot, in seconds.</summary>
@@ -126,6 +133,10 @@ namespace Parley.Engine
         public string seenPhase = "";
         public string inheritedSeal = "";
         private string alarmedPhase = "";
+        // the phase in which this device took (or got back) its seat: in that phase it cannot
+        // tell a seal it lost in a restart from one forged in its name
+        private int seatSeenPower = -2;
+        private string seatSincePhase = "";
 
         // ---- outputs ----
         /// <summary>Objects to write (id, text). The adapter writes them and clears <see cref="outCount"/>.</summary>
@@ -159,8 +170,10 @@ namespace Parley.Engine
         private bool recDirty;
         private string cacheKey = "";
         private string cacheArchive = "";
-        private int sentSecond = -1;
-        private int sentBytes;
+        private float tokens;
+        private int tokenMs = -1;
+        private int lastResendMs;
+        private int resendPage;
 
         // ---- saves seen this session (D) ----
         public string[] saveName;
@@ -197,6 +210,12 @@ namespace Parley.Engine
 
         public void OnPlayerJoined(string name)
         {
+            if (name != me && FindPlayer(name) < 0)
+            {
+                // a newcomer may not receive the current values: send everything again
+                slotDirty = true;
+                if (isHub) { hubWritten = false; recDirty = true; for (int i = 0; i < MAX_PAGES; i++) pageSent[i] = ""; }
+            }
             if (FindPlayer(name) < 0 && playerCount < MAX_PLAYERS) { players[playerCount] = name; playerCount++; }
             if (isHub) flow.PlayerJoined(name);
         }
@@ -213,11 +232,15 @@ namespace Parley.Engine
             if (isHub) flow.PlayerLeft(name);
         }
 
-        /// <summary>VRChat says this object now belongs to this player.</summary>
+        /// <summary>
+        /// Who owns this object now. Call it on VRChat's ownership event and also every tick
+        /// with Networking.GetOwner, because that event can be missing or come after
+        /// OnPlayerLeft. Nothing happens unless the owner changed.
+        /// </summary>
         public void OnOwner(string objectId, string ownerName)
         {
             int k = ObjIndex(objectId);
-            if (k < 0) return;
+            if (k < 0 || owner[k] == ownerName) return; // also called every tick with the current owner
             owner[k] = ownerName;
             if (k == 0)
             {
@@ -380,8 +403,16 @@ namespace Parley.Engine
         {
             stepMs = nowMs;
             if (firstStepMs < 0) firstStepMs = nowMs;
-            int second = nowMs / 1000;
-            if (second != sentSecond) { sentSecond = second; sentBytes = 0; }
+            float burst = sendBudgetBytes * burstSeconds;
+            if (tokenMs < 0) tokens = burst; else tokens += (nowMs - tokenMs) / 1000f * sendBudgetBytes;
+            if (tokens > burst) tokens = burst;
+            tokenMs = nowMs;
+            if (nowMs - lastResendMs >= (int)(resendSeconds * 1000))
+            {
+                lastResendMs = nowMs;
+                slotDirty = true;
+                if (isHub) { recDirty = true; pageSent[resendPage] = ""; resendPage = (resendPage + 1) % MAX_PAGES; }
+            }
             if (isHub)
             {
                 if (!haveSession) { sessionStartMs = nowMs; haveSession = true; }
@@ -419,6 +450,7 @@ namespace Parley.Engine
                     if (flow.stage == GameFlow.STAGE_ORDERS || flow.stage == GameFlow.STAGE_PAUSED) { sealPhase = pid; mySeal = ""; slotDirty = true; }
                 }
             }
+            if (p != seatSeenPower) { seatSeenPower = p; seatSincePhase = pid; }
             if (p < 0) return;
             int st = flow.stage;
             bool timeUp = (st == GameFlow.STAGE_ORDERS && flow.deadline >= 0 && now >= flow.deadline) || st == GameFlow.STAGE_CLOSING;
@@ -455,7 +487,7 @@ namespace Parley.Engine
                 }
                 return;
             }
-            if (frozen == inheritedSeal || alarmedPhase == pid) return;
+            if (frozen == inheritedSeal || seatSincePhase == pid || alarmedPhase == pid) return;
             alarmedPhase = pid;
             Alarm(acceptedHub + " froze a seal for " + map.powerName[p] + " that this device never made");
         }
@@ -566,12 +598,17 @@ namespace Parley.Engine
             string sig = maxEpoch.ToString() + "|" + sum + "|" + seats + "|" + flow.LiveState(0);
             bool changed = sig != lastSig;
             int gap = nowMs - lastHubWriteMs;
-            if (!hubWritten || (changed && gap >= (int)(hubWriteSeconds * 1000)) || gap >= (int)(heartbeatSeconds * 1000))
+            bool due = gap >= (int)(heartbeatSeconds * 1000);
+            if (!hubWritten || (changed && gap >= (int)(hubWriteSeconds * 1000)) || due)
             {
                 string t = "GH1\n" + history.EscapeName(me) + "\n" + hubEpoch.ToString() + "\n" + sessionStartMs.ToString() + "\n" + nowMs.ToString()
                     + "\n" + archive.Length.ToString() + "\n" + sum + "\n" + pages.ToString() + "\n" + seats + "\n" + flow.LiveState(Now(nowMs));
-                Put(HUB, t);
-                hubWritten = true; lastSig = sig; lastHubWriteMs = nowMs;
+                if (!hubWritten || due || Fits(t))
+                {
+                    Put(HUB, t);
+                    hubWritten = true; lastSig = sig; lastHubWriteMs = nowMs;
+                }
+                else return; // the hub state goes first; nothing else until it has
             }
             if (recDirty && owner[1] == me)
             {
@@ -590,10 +627,10 @@ namespace Parley.Engine
             }
         }
 
-        // whether a text still fits in this second's sending budget
+        // whether a text fits in the sending budget now
         private bool Fits(string text)
         {
-            return sentBytes + 2 * text.Length <= sendBudgetBytes;
+            return tokens >= 2 * text.Length;
         }
 
         private string CachedArchive()
@@ -985,7 +1022,7 @@ namespace Parley.Engine
 
         private void Put(string id, string text)
         {
-            sentBytes += 2 * text.Length;
+            tokens -= 2 * text.Length;
             for (int i = 0; i < outCount; i++) if (outId[i] == id) { outText[i] = text; return; }
             if (outCount >= MAX_OUT) return;
             outId[outCount] = id; outText[outCount] = text; outCount++;

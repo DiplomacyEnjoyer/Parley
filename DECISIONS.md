@@ -842,10 +842,22 @@ changed or settled these points of `docs/vrchat-sync-design.md`:
   order text in the archive follows that order, so a hub that started the game and a
   device that loaded it wrote the same orders in a different order. Found by the first
   simulated game.
-- **Sending budget.** The hub writes its state at most once a second; archive pages and
-  records wait for the next second when this device has sent 9,000 bytes in the current
-  one (text counted at two bytes a character). 8,000-character pages broke the
-  ~11 KB/s budget by themselves. Measured peak in whole seven-player games: about 9 KB/s.
+- **Sending budget: 4 KB/s.** Players report VRChat throttling at 4-6 KB/s rather than the
+  documented ~11 KB/s, so the harness holds every device to 4,000 bytes a second averaged
+  over five seconds (text counted at two bytes a character). The node paces itself with a
+  token bucket (3,600 bytes a second, bursts of 1.5 seconds' worth): the hub state goes
+  first (at most once a second), then records, then archive pages of 1,000 characters.
+  Measured in whole seven-player games: at most ~3.3 KB/s over five seconds, single
+  seconds up to ~8 KB. If VRChat turns out to cut off single-second bursts, lower
+  `burstSeconds`.
+- **Resend, never assume.** Late joiners do not reliably receive synced values, so when
+  anyone joins every device writes its slot again and the hub its state, records and all
+  pages; and every 30 seconds each device rewrites its slot and the hub one page and its
+  records. The harness drops 30% of a late joiner's initial values.
+- **Ownership is polled.** `OnOwner` does nothing unless the owner changed, and the
+  adapter calls it every tick with `Networking.GetOwner`, because the ownership event can
+  be missing (the harness drops 30%) or come after `OnPlayerLeft`. A requested ownership
+  takes effect only after a delay (the transfer must be acknowledged).
 - **A sheet opened by a player who then left still counts.** The hub keeps the last
   copy of a departed player's slot and uses an opening in it. Without this, a hub that
   left mid-reveal would lose its own already-published sheet on the new hub.
@@ -883,6 +895,11 @@ changed or settled these points of `docs/vrchat-sync-design.md`:
   device, which keeps its own archive and stops following that hub until another device
   hosts. A sheet that does not match its seal (E5) or that is never opened (E6) is
   refused everywhere; those units hold and are counted as "never opened".
+- *In the phase in which a device takes or gets back its seat, it does not alarm about
+  a seal it does not know.* It cannot tell a seal it lost in a restart from one forged in
+  its name (found by the harness: a restarted device first saw an older hub state without
+  its seal). A hub forging a seal for a player who has just rejoined goes unnoticed for
+  that one phase; the forged seal cannot be opened, so those units hold.
 - *"Closed while I was still writing" (E2)* fires only when the hub said everyone had
   submitted, or listed this present player as absent. A host who closes on time while a
   slow device's seal is still on its way is not flagged: the device seals at the

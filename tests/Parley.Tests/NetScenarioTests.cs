@@ -667,10 +667,10 @@ public class NetScenarioTests
         var sim = Table(seed, s);
         sim.RunUntil(() => Phases(sim) >= 20, 3600_000);
         Done(sim);
-        output.WriteLine("F1 peak bytes per second on any device: " + sim.PeakBytesPerSecond + " (budget " + s.BudgetBytesPerSecond + ")");
+        output.WriteLine("F1 peak on any device: " + sim.PeakAverage + " B/s averaged over 5 s (budget " + s.BudgetBytesPerSecond + "), " + sim.PeakBytesPerSecond + " B in a single second");
         output.WriteLine("F2 largest single send: " + sim.LargestSendBytes + " bytes (" + sim.LargestSendObj + "), limit " + s.ObjectLimitBytes);
         Assert.Equal(0, sim.OverBudgetSeconds);
-        Assert.True(sim.PeakBytesPerSecond <= s.BudgetBytesPerSecond);
+        Assert.True(sim.PeakAverage <= s.BudgetBytesPerSecond);
         Assert.True(sim.LargestSendBytes < s.ObjectLimitBytes);
     }
 
@@ -918,7 +918,7 @@ public class NetScenarioTests
         sim.RunUntil(() => Phases(sim) >= 12, 3600_000);
         Assert.True(Phases(sim) >= 12, "play was held up");
         for (int p = 0; p < Map.powerCount; p++) Assert.Equal(Names[p], sim.Hub.G.History.seatName[p]);
-        Assert.True(spam.PeakBytesPerSecond <= sim.S.BudgetBytesPerSecond, "the spammer sent " + spam.PeakBytesPerSecond + " bytes a second");
+        Assert.True(spam.PeakAverage <= sim.S.BudgetBytesPerSecond, "the spammer sent " + spam.PeakAverage + " bytes a second");
         Done(sim);
     }
 }

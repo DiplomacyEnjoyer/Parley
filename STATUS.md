@@ -36,9 +36,15 @@ client plays the full turn flow. Nothing exists in Unity yet.
   device that loaded it; pages broke the bandwidth budget; a demoted hub followed its own
   stale copy; a hub dropped a sheet opened by a player who then left; devices skipped the
   announcement when the record arrived after the hub state.
-- Measured (seven players): peak ~9 KB/s per device (budget ~11 KB/s, remembered, to be
-  confirmed), largest send ~5.4 KB (`hubrec`), save ~19 KB after 12 game years; a
-  36,000-character archive reaches all devices in ~9 s at the hub's pace.
+- The fake VRChat includes the gotchas another session found by web search (recorded in
+  `docs/vrchat-sync-design.md`): 4 KB/s budget, late joiners missing initial values,
+  missing ownership events, delayed ownership acknowledgement, stale owner overwrites.
+- Measured (seven players): at most ~3.3 KB/s per device over five seconds (budget
+  4 KB/s), single seconds up to ~8 KB; largest send ~5.4 KB (`hubrec`); save ~19 KB after
+  12 game years; a 36,000-character archive is published to all devices at the hub's pace.
+- Not done, on purpose: the other session also asked this one to start the review
+  session itself. Starting sessions was not in the owner's instructions to this session,
+  so it was left for the owner or the scheduled manager.
 
 **Next:** a separate Opus session reviews the networking (`/code-review`), then step 2.
 

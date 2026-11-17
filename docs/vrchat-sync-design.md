@@ -34,6 +34,26 @@ called `GameFlow.…` below) exists and is tested.
 | Shared clock | `Networking.GetServerTimeInMilliseconds()` is the same on all devices. | An integer that wraps; use differences. |
 | Nothing | There is no private local storage, no world-wide storage, and no way to send data out of the world. | |
 
+**Checked later (November 2026)** by another session's web search of VRChat's creator
+documentation (creators.vrchat.com) and VRChat's bug tracker. The page addresses were
+not passed on, so the claims are recorded as reported and still need the source pages:
+
+- Confirmed: only the owner writes synced variables; ownership passes automatically when
+  the owner leaves; the instance master changes only when the master leaves; manual sync
+  allows about 280 KB per serialization; PlayerData is 100 KB per player per world,
+  measured compressed; a save over the limit is not partly written (error, nothing
+  saved); every change resends all of that player's PlayerData;
+  `OnPlayerDataStorageWarning` and `OnPlayerDataStorageExceeded` exist.
+- Gotchas, all now modelled by the simulated VRChat (`tools/Parley.Tools/VrSim.cs`) and
+  survived by the node (DECISIONS §29): bandwidth throttling reported at 4-6 KB/s, not
+  the documented ~11 KB/s (the harness holds the world to 4 KB/s); late joiners do not
+  reliably receive manual-synced values on joining (open bug: owners must resend);
+  after an ownership change the previous owner's value can briefly overwrite the new
+  owner's (scenario C8); a new owner cannot write until the transfer is acknowledged;
+  `OnOwnershipTransferred` and `OnPlayerLeft` come in either order, and the former
+  sometimes does not fire (check ownership every tick); compare ownership, not
+  `IsMaster`.
+
 ## Who is in charge
 
 **The hub is the owner of one object, `GameHub`.** At first that is the instance master.
