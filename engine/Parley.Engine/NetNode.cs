@@ -785,6 +785,92 @@ namespace Parley.Engine
         }
 
         // =====================================================================
+        // Resuming next session: what the saves of the players present offer
+        // =====================================================================
+
+        /// <summary>Per offered game: the newest archive, how many present players' saves belong to it, and its phase.</summary>
+        public string[] offerArchive;
+        public int[] offerHolders;
+        public string[] offerLabel;
+        public int offerCount;
+
+        /// <summary>
+        /// Groups the saves of everybody present: two saves are the same game if one archive
+        /// is the beginning of the other (the longer is newer). A save that conflicts with the
+        /// others (edited, or from before a roll-back) is its own group. Groups held by more
+        /// players come first.
+        /// </summary>
+        public int ComputeOffers()
+        {
+            offerArchive = new string[MAX_PLAYERS]; offerHolders = new int[MAX_PLAYERS]; offerLabel = new string[MAX_PLAYERS];
+            offerCount = 0;
+            for (int i = 0; i < saveCount; i++)
+            {
+                if (saveText[i] == "" || FindPlayer(saveName[i]) < 0 || history.PeekMap(saveText[i]) != map.mapId + "." + map.hash) continue;
+                bool placed = false;
+                for (int g = 0; g < offerCount && !placed; g++)
+                {
+                    int rel = Related(saveText[i], offerArchive[g]);
+                    if (rel < 0) continue;
+                    if (rel == 1) offerArchive[g] = saveText[i];
+                    offerHolders[g]++;
+                    placed = true;
+                }
+                if (!placed && offerCount < MAX_PLAYERS) { offerArchive[offerCount] = saveText[i]; offerHolders[offerCount] = 1; offerCount++; }
+            }
+            // most holders first (a few entries: a simple exchange sort)
+            for (int a = 0; a < offerCount; a++)
+                for (int b = a + 1; b < offerCount; b++)
+                    if (offerHolders[b] > offerHolders[a])
+                    {
+                        string t = offerArchive[a]; offerArchive[a] = offerArchive[b]; offerArchive[b] = t;
+                        int h = offerHolders[a]; offerHolders[a] = offerHolders[b]; offerHolders[b] = h;
+                    }
+            for (int g = 0; g < offerCount; g++)
+            {
+                string[] p = offerArchive[g].Split(';');
+                string last = p.Length >= 6 ? Body(p[p.Length - 2]) : "";
+                int dot = last.IndexOf('.');
+                offerLabel[g] = dot > 0 ? last.Substring(0, dot) : last;
+            }
+            return offerCount;
+        }
+
+        // -1 unrelated, 0 the same positions, 1 a extends b, 2 b extends a
+        private int Related(string a, string b)
+        {
+            string[] pa = a.Split(';'); string[] pb = b.Split(';');
+            int na = pa.Length - 5; int nb = pb.Length - 5;
+            if (na <= 0 || nb <= 0) return -1;
+            int offA = -1; int offB = -1;
+            string firstB = Body(pb[4]);
+            for (int i = 0; i < na && offA < 0; i++) if (Body(pa[4 + i]) == firstB) { offA = i; offB = 0; }
+            if (offA < 0)
+            {
+                string firstA = Body(pa[4]);
+                for (int j = 0; j < nb && offB < 0; j++) if (Body(pb[4 + j]) == firstA) { offB = j; offA = 0; }
+            }
+            if (offA < 0) return -1;
+            int k = 0;
+            while (offA + k < na && offB + k < nb && Body(pa[4 + offA + k]) == Body(pb[4 + offB + k])) k++;
+            bool endA = offA + k == na; bool endB = offB + k == nb;
+            if (endA && endB) return 0;
+            if (endB) return 1;
+            if (endA) return 2;
+            return -1;
+        }
+
+        /// <summary>Host: go back to the start of an earlier phase (an index into the archive). Every device follows.</summary>
+        public bool HostRollBack(int historyIndex, int nowMs)
+        {
+            if (!isHub) return false;
+            if (!flow.RollBack(historyIndex, Now(nowMs))) return false;
+            recordCount = 0; recDirty = true;
+            for (int i = 0; i < playerCount; i++) flow.PlayerJoined(players[i]);
+            return true;
+        }
+
+        // =====================================================================
         // Small helpers
         // =====================================================================
 

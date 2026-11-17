@@ -28,6 +28,7 @@ public sealed class VrSim
         public int PlayerDataLimitBytes = 100_000;
         public int PlayerDataMinDelayMs = 500, PlayerDataMaxDelayMs = 4000;
         public double SaveFailChance = 0;
+        public HashSet<string> SaveFailNames = new();   // these players' saves always fail
         public int AgreeAfterMs = 20_000;          // invariant 1: how long a device may lag the hub
         // world constants every device's engine uses
         public int MoveSeconds = 120, RetreatSeconds = 30, AdjustSeconds = 30;
@@ -319,7 +320,7 @@ public sealed class VrSim
         long bytes = 2L * text.Length;
         if (bytes > LargestSaveBytes) LargestSaveBytes = bytes;
         Spy(d, "PlayerData of " + d.Name, text);
-        bool ok = bytes <= S.PlayerDataLimitBytes && !(S.SaveFailChance > 0 && Rng.NextDouble() < S.SaveFailChance);
+        bool ok = bytes <= S.PlayerDataLimitBytes && !S.SaveFailNames.Contains(d.Name) && !(S.SaveFailChance > 0 && Rng.NextDouble() < S.SaveFailChance);
         Push(new Ev { Time = Now + R(50, 500), Kind = 5, Ok = ok, To = d, Inc = d.Incarnation });
         if (!ok) { FailedSaves++; return; }
         Cloud[d.Name] = text;

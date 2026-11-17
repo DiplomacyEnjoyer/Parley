@@ -463,4 +463,196 @@ public class NetScenarioTests
         Assert.True(sim.RunUntil(() => late.G.Flow.Archive() == sim.Hub.G.Flow.Archive(), 40_000), "the late joiner did not end with the new archive");
         Done(sim);
     }
+
+    // ------------------------------------------------------------------ D. saves and resuming next week
+
+    /// <summary>Plays some phases, then everybody leaves mid-phase (B6). Returns the archive the game had.</summary>
+    private static string PlayThenAllLeave(VrSim sim, int phases)
+    {
+        Assert.True(sim.RunUntil(() => Phases(sim) >= phases, 3600_000));
+        sim.RunUntil(() => sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS, 600_000);
+        sim.RunFor(10_000 + sim.Rng.Next(20_000));
+        sim.Settle();
+        string archive = sim.Hub.G.Flow.Archive();
+        foreach (var d in sim.Present.ToList()) sim.Leave(d.Name); // within one moment, so no phase resolves meanwhile
+        Assert.Empty(sim.Present);
+        return archive;
+    }
+
+    /// <summary>Next week: a new instance with the same PlayerData; these players come back one by one.</summary>
+    private static VrSim NextSession(VrSim old, int seed, IEnumerable<string> who, VrSim.Settings s = null)
+    {
+        var sim = new VrSim(Map, seed + 1000, s ?? old.S, old.Cloud);
+        foreach (var n in who) { sim.Join(n); sim.RunFor(1000 + sim.Rng.Next(10_000)); }
+        return sim;
+    }
+
+    private static void ResumeOffer(VrSim sim, int offer)
+    {
+        var hub = sim.Hub;
+        Assert.True(hub.Node.HostLoad(hub.Node.offerArchive[offer], (int)sim.Now), hub.G.Flow.error);
+        sim.RunFor(10_000);
+        hub.Node.HostResume((int)sim.Now);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D1_EverybodyLeavesAndNextSessionEverybodyReturns(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        string archive = PlayThenAllLeave(sim, 6 + seed % 5);
+        var next = NextSession(sim, seed, Names.Take(Map.powerCount));
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 1 && next.Hub.Node.offerHolders[0] == Map.powerCount, 60_000), "no resume offer held by everybody");
+        Assert.Equal(archive.Split(';').Length, next.Hub.Node.offerArchive[0].Split(';').Length);
+        Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+        ResumeOffer(next, 0);
+        Assert.Equal(GameFlow.STAGE_ORDERS, next.Hub.G.Flow.stage);
+        Assert.Equal(VrSim.Bodies(archive).Last(), VrSim.Bodies(next.Hub.G.Flow.Archive()).Last());
+        for (int p = 0; p < Map.powerCount; p++) Assert.Equal(Names[p], next.Hub.G.History.seatName[p]);
+        int c = Phases(next);
+        Assert.True(next.RunUntil(() => Phases(next) >= c + 4, 3600_000), "the resumed game did not go on");
+        Done(next);
+        next.CheckSaves();
+        Assert.Empty(next.Violations);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D2_OnlyTwoReturnOneByOne(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        string archive = PlayThenAllLeave(sim, 5);
+        var next = NextSession(sim, seed, new[] { Names[3], Names[5] });
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 1 && next.Hub.Node.offerHolders[0] == 2, 60_000), "no offer once both saves loaded");
+        Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+        ResumeOffer(next, 0);
+        int c = Phases(next);
+        Assert.True(next.RunUntil(() => Phases(next) >= c + 3, 3600_000), "the resumed game did not go on");
+        Done(next);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D3_OneMissedTheLastPhaseAndTheNewerSaveWins(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 5, 3600_000));
+        sim.S.SaveFailNames.Add("Bo");
+        int c = Phases(sim);
+        string archive = PlayThenAllLeave(sim, c + 2);
+        Assert.NotEqual(VrSim.Bodies(archive).Count, VrSim.Bodies(sim.Cloud["Bo"]).Count);
+        sim.S.SaveFailNames.Clear();
+        var next = NextSession(sim, seed, Names.Take(Map.powerCount).OrderBy(_ => sim.Rng.Next()));
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 1 && next.Hub.Node.offerHolders[0] == Map.powerCount, 60_000));
+        Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D4_AForgedSaveIsShownButNotPreferred(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        string archive = PlayThenAllLeave(sim, 6);
+        // Cy edits an old position in their save and fixes the checksum
+        var parts = sim.Cloud["Cy"].Split(';');
+        int plus = parts[5].IndexOf('+'); int at = (plus < 0 ? parts[5].Length : plus) / 2;
+        var b = parts[5].ToCharArray(); b[at] = b[at] == 'a' ? 'b' : 'a'; parts[5] = new string(b);
+        string content = string.Join(";", parts.Take(parts.Length - 1));
+        sim.Cloud["Cy"] = content + ";" + sim.Devices[0].G.Codec.Checksum(content);
+        var next = NextSession(sim, seed, Names.Take(Map.powerCount));
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 2 && next.Hub.Node.offerHolders[0] + next.Hub.Node.offerHolders[1] == Map.powerCount, 60_000), "the forged save was not shown separately");
+        Assert.Equal(Map.powerCount - 1, next.Hub.Node.offerHolders[0]);
+        Assert.Equal(1, next.Hub.Node.offerHolders[1]);
+        Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D5_PlayersFromTwoGamesAreInTheRoom(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        string gameX = PlayThenAllLeave(sim, 5);
+        // another group plays another game in another week, with the same world
+        var other = new VrSim(Map, seed + 500, sim.S, sim.Cloud);
+        other.Join("Hal", 0); other.RunFor(1000); other.Join("Ivy", 1); other.RunFor(1000); other.Join("Jo", 2);
+        Assert.True(other.RunUntil(() => other.Hub.G.Flow.SeatedCount() == 3, 30_000));
+        other.Hub.Node.HostStart((int)other.Now);
+        string gameY = PlayThenAllLeave(other, 4);
+        string halBefore = sim.Cloud["Hal"];
+        var next = NextSession(sim, seed, new[] { "Ada", "Hal", "Bo", "Ivy" });
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 2 && next.Hub.Node.offerHolders[0] == 2 && next.Hub.Node.offerHolders[1] == 2, 60_000), "both games were not offered");
+        int x = VrSim.Bodies(next.Hub.Node.offerArchive[0]).SequenceEqual(VrSim.Bodies(gameX)) ? 0 : 1;
+        Assert.Equal(VrSim.Bodies(gameY), VrSim.Bodies(next.Hub.Node.offerArchive[1 - x]));
+        ResumeOffer(next, x);
+        int c = Phases(next);
+        Assert.True(next.RunUntil(() => Phases(next) >= c + 2, 3600_000));
+        Assert.Equal(halBefore, next.Cloud["Hal"]);
+        Assert.NotEqual(gameX, next.Cloud["Ada"]);
+        Done(next);
+    }
+
+    [Theory]
+    [MemberData(nameof(OneSeed))]
+    public void D6_ALongGameIsTrimmedToTheSaveSize(int seed)
+    {
+        var s = HandoverSettings(); s.MaxArchiveChars = 4000; s.PlayerDataLimitBytes = 2 * 5000;
+        var sim = Table(seed, s);
+        int startYear = sim.Hub.G.State.year;
+        string archive = PlayThenAllLeave(sim, 30);
+        var entries = archive.Split(';').Skip(4).SkipLast(2).ToList();
+        Assert.True(entries.Count(e => e.Contains('+')) < entries.Count, "nothing was trimmed");
+        Assert.True(archive.Length <= 5000);
+        var next = NextSession(sim, seed, Names.Take(Map.powerCount));
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() == 1, 60_000));
+        Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+        ResumeOffer(next, 0);
+        int c = Phases(next);
+        Assert.True(next.RunUntil(() => Phases(next) >= c + 3 || next.Hub.G.History.CodeAt(next.Hub.G.History.count - 1) != sim.Devices[0].G.Flow.CurrentCode(), 3600_000));
+        Done(next);
+        next.CheckSaves();
+        Assert.Empty(next.Violations);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D7_ASaveWriteFailsAndTheGameGoesOn(int seed)
+    {
+        var s = HandoverSettings();
+        s.SaveFailNames.Add("Di");
+        var sim = Table(seed, s);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 6, 3600_000));
+        sim.RunFor(10_000);
+        var di = sim.Find("Di");
+        Assert.Contains(Enumerable.Range(0, di.Node.noticeCount).Select(i => di.Node.notices[i]), n => n.Contains("could not be stored"));
+        Assert.False(sim.Cloud.ContainsKey("Di"));
+        foreach (var d in sim.Present) if (d.Name != "Di") Assert.True(sim.Cloud.ContainsKey(d.Name));
+        Done(sim);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void D8_RollBackThenTheSessionEnds(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 8, 3600_000));
+        sim.Settle();
+        int back = Phases(sim) - 4;
+        string discarded = sim.Hub.G.Flow.Archive();
+        Assert.True(sim.Hub.Node.HostRollBack(back, (int)sim.Now), sim.Hub.G.Flow.error);
+        sim.RunFor(10_000);
+        sim.Hub.Node.HostResume((int)sim.Now);
+        sim.RunFor(5_000);
+        Assert.True(sim.Settle(), "the devices did not follow the roll-back");
+        var kept = VrSim.Bodies(discarded).Take(back + 1).ToList();
+        foreach (var d in sim.Present) Assert.Equal(kept, VrSim.Bodies(d.G.Flow.Archive()).Take(back + 1).ToList());
+        Assert.True(sim.Hub.G.History.count <= back + 3);
+        string archive = PlayThenAllLeave(sim, back + 1);
+        var next = NextSession(sim, seed, Names.Take(Map.powerCount));
+        Assert.True(next.RunUntil(() => next.Hub.Node.ComputeOffers() >= 1 && next.Hub.Node.offerHolders[0] == Map.powerCount, 60_000));
+        Assert.Equal(1, next.Hub.Node.offerCount);
+        Assert.Equal(VrSim.Bodies(archive), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+        Assert.NotEqual(VrSim.Bodies(discarded), VrSim.Bodies(next.Hub.Node.offerArchive[0]));
+        Assert.Empty(sim.AllAlarms());
+        Assert.Empty(sim.Violations);
+    }
 }
