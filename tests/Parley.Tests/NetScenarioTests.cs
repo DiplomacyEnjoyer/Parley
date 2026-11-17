@@ -325,4 +325,142 @@ public class NetScenarioTests
         sim.Leave(old, VrSim.IN_FLIGHT_LATE);
         AfterHandover(sim, old);
     }
+
+    // ------------------------------------------------------------------ B. people coming and going
+
+    private static int PowerOf(VrSim sim, string name) => sim.Hub.G.Flow.SeatOf(name);
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void B1_ASpectatorJoinsMidPhase(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 3 && sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS, 3600_000));
+        sim.RunFor(sim.Rng.Next(30_000));
+        var spec = sim.Join("Hal");
+        Assert.True(sim.RunUntil(() => spec.G.Flow.Archive() == sim.Hub.G.Flow.Archive() && spec.G.Flow.stage == sim.Hub.G.Flow.stage, 30_000), "the spectator did not get the game");
+        Assert.Equal(sim.Hub.G.Flow.CurrentCode(), spec.G.Flow.CurrentCode());
+        Assert.Equal(-1, spec.Node.MyPower());
+        for (int k = 0; k < 40; k++)
+        {
+            sim.Step();
+            for (int p = 0; p < Map.powerCount; p++)
+                if (!spec.G.Flow.opened[p]) Assert.Equal("", spec.G.Flow.sheet[p]);
+        }
+        int c = Phases(sim);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + 3, 3600_000));
+        Done(sim);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void B2_AHeadsetRestartsBeforeTheFreezeAndWritesTheSheetAgain(int seed)
+    {
+        var s = HandoverSettings(); s.MoveSeconds = 150; s.SubmitMinMs = 1000; s.SubmitMaxMs = 20_000;
+        var sim = Table(seed, s);
+        string who = Names[1 + seed % (Map.powerCount - 1)];
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 3 && sim.Hub.G.State.phase == BoardState.PHASE_MOVE && sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS
+            && sim.Hub.G.Flow.sealText[PowerOf(sim, who)] != "", 3600_000), "no sealed movement phase");
+        int p = PowerOf(sim, who); int c = Phases(sim);
+        foreach (var d in sim.Present) if (d.Name != who) { d.NeverSubmit = true; d.Node.SubmitOff(); } // the phase runs on its clock
+        var back = sim.Restart(who, 5000);
+        Assert.True(sim.RunUntil(() => back.Node.MyPower() == p, 30_000), "the seat did not come back by name");
+        Assert.True(sim.RunUntil(() => Phases(sim) > c, 600_000));
+        Assert.Equal(Announcement.S_ORDERS, sim.Hub.G.Announce.powerStatus[p]);
+        Assert.Equal(back.Node.keptSheet.First(x => x != null && sim.Hub.G.Flow.lastSheet[p] == x), sim.Hub.G.Flow.lastSheet[p]);
+        foreach (var d in sim.Present) d.NeverSubmit = false;
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + 4, 3600_000));
+        Done(sim);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void B3_AHeadsetRestartsAfterItsSealWasFrozen(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        string who = Names[1 + seed % (Map.powerCount - 1)];
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 3 && sim.Hub.G.Flow.stage == GameFlow.STAGE_REVEAL && sim.Hub.G.Flow.sealText[PowerOf(sim, who)] != ""
+            && !sim.Hub.G.Flow.opened[PowerOf(sim, who)], 3600_000), "no reveal with that seal");
+        int p = PowerOf(sim, who); int c = Phases(sim); long frozenAt = sim.Now;
+        sim.Restart(who, 300);
+        Assert.True(sim.RunUntil(() => Phases(sim) > c, 60_000));
+        Assert.True(sim.Now - frozenAt <= 1000 * (20 + 3), "the others waited beyond the reveal window");
+        Assert.Equal(Announcement.S_UNOPENED, sim.Hub.G.Announce.powerStatus[p]);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + 4, 3600_000));
+        Done(sim);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void B4_APlayerLeavesForGoodAndSomebodyElseTakesTheSeat(int seed)
+    {
+        var s = HandoverSettings(); s.MoveSeconds = 150; s.SubmitMaxMs = 10_000;
+        var sim = Table(seed, s);
+        string who = Names[1 + seed % (Map.powerCount - 1)];
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 3 && sim.Hub.G.State.phase == BoardState.PHASE_MOVE && sim.Hub.G.Flow.stage == GameFlow.STAGE_ORDERS
+            && sim.Hub.G.Flow.sealText[PowerOf(sim, who)] != "", 3600_000), "no sealed movement phase");
+        int p = PowerOf(sim, who); int c = Phases(sim);
+        string oldSeal = sim.Hub.G.Flow.sealText[p];
+        foreach (var d in sim.Present) if (d.Name != who) { d.NeverSubmit = true; d.Node.SubmitOff(); } // the phase runs on its clock
+        sim.Leave(who);
+        sim.RunFor(5_000);
+        var hal = sim.Join("Hal", p);
+        Assert.True(sim.RunUntil(() => sim.Hub.G.History.seatName[p] == "Hal", 30_000), "the seat was not taken over");
+        Assert.NotEqual(oldSeal, sim.Hub.G.Flow.sealText[p]);
+        Assert.True(sim.RunUntil(() => Phases(sim) > c, 600_000));
+        Assert.Equal(Announcement.S_ORDERS, sim.Hub.G.Announce.powerStatus[p]);
+        Assert.Contains(sim.Hub.G.Flow.lastSeal[p], hal.Node.keptSeal);
+        foreach (var d in sim.Present) d.NeverSubmit = false;
+        Assert.True(sim.RunUntil(() => Phases(sim) >= c + 4, 3600_000));
+        Done(sim);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void B5_ThreePlayersDropAndRejoinThroughAWholeGame(int seed)
+    {
+        var sim = Table(seed, HandoverSettings());
+        var flaky = Names.Take(Map.powerCount).OrderBy(_ => sim.Rng.Next()).Take(3).ToList();
+        var nextAt = flaky.ToDictionary(n => n, n => sim.Now + 20_000 + sim.Rng.Next(200_000));
+        var backAt = new Dictionary<string, long>();
+        int startYear = sim.Hub.G.State.year;
+        int drops = 0;
+        while (!Finished(sim) && sim.Hub.G.State.year < startYear + 8 && sim.Now < 1_000_000 + 8 * 3600_000L)
+        {
+            sim.Step();
+            foreach (var n in flaky)
+            {
+                if (sim.Find(n) != null && sim.Now >= nextAt[n] && sim.Present.Count > 1)
+                {
+                    sim.Leave(n); drops++;
+                    backAt[n] = sim.Now + 5_000 + sim.Rng.Next(60_000);
+                    nextAt[n] = long.MaxValue;
+                }
+                else if (sim.Find(n) == null && backAt.TryGetValue(n, out long t) && sim.Now >= t)
+                {
+                    sim.Join(n);
+                    nextAt[n] = sim.Now + 30_000 + sim.Rng.Next(300_000);
+                }
+            }
+        }
+        foreach (var n in flaky) if (sim.Find(n) == null) sim.Join(n);
+        sim.RunFor(30_000);
+        Assert.True(drops >= 6, "only " + drops + " drops");
+        Assert.True(sim.Hub.G.State.year >= startYear + 8 || Finished(sim), "the game did not get far: " + sim.Hub.G.State.year);
+        Done(sim);
+    }
+
+    [Theory]
+    [MemberData(nameof(FewSeeds))]
+    public void B7_ALateJoinerGetsAWholeArchiveWhileAPhaseResolves(int seed)
+    {
+        var s = HandoverSettings(); s.MaxArchiveChars = 40_000;
+        var sim = Table(seed, s);
+        Assert.True(sim.RunUntil(() => Phases(sim) >= 10 && sim.Hub.G.Flow.stage == GameFlow.STAGE_REVEAL, 3600_000));
+        var late = sim.Join("Hal", -1, 2500);
+        int c = Phases(sim);
+        Assert.True(sim.RunUntil(() => Phases(sim) > c, 60_000));
+        Assert.True(sim.RunUntil(() => late.G.Flow.Archive() == sim.Hub.G.Flow.Archive(), 40_000), "the late joiner did not end with the new archive");
+        Done(sim);
+    }
 }
